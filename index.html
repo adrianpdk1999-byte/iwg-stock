@@ -136,7 +136,7 @@ b.neg{color:var(--bad)}
 
 <script>
 /* Watchdog: a separate script, so it still runs if the main script fails. Shows the error on screen. */
-window.SF_VERSION = '2026-11-15b';
+window.SF_VERSION = '2026-11-15c';
 window.SF_ERRORS = [];
 window.addEventListener('error', function (e) {
   window.SF_ERRORS.push((e.message || 'Error') + (e.lineno ? ' (line ' + e.lineno + ')' : ''));
@@ -992,9 +992,10 @@ document.addEventListener('keydown', e => {
 function showSugg(inp){
   const box = $('#sugg'), v = inp.value.trim();
   if (!v){ box.hidden = true; return; }
-  const res = search(v, 8), me = S.shop;
+  // count shown for the shop this list is for: the Adjust page's chosen shop, otherwise the shop you work for
+  const res = search(v, 8), me = inp.dataset.k==='adj' ? S.adjShop : S.shop;
   box.innerHTML = res.map(it => `<div data-pick="${esc(it.sku)}" data-k="${inp.dataset.k}"><b>${dotSku(it.sku)}</b>
-    <span class="muted"> · here ${it.qty[me]||0} · total ${it.total}</span></div>`).join('') || '<div class="muted">No match. Use "+ Item not in list yet".</div>';
+    <span class="muted"> · ${esc(shortName(me))} ${it.qty[me]||0} · total ${it.total}</span></div>`).join('') || '<div class="muted">No match. Use "+ Item not in list yet".</div>';
   box.hidden = false;
 }
 
