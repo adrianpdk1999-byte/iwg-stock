@@ -19,8 +19,9 @@
 var SHEET_STOCK = 'Stock', SHEET_SHOPS = 'Shops', SHEET_LOG = 'Log', SHEET_USERS = 'Users',
     SHEET_LOGINS = 'Logins', SHEET_TRANSFERS = 'Transfers', SHEET_REQ = 'Requests';
 /*
- * Roles: Staff   = look up + record sales (Sold today) + confirm arrival of approved transfers.
- *        Manager = Staff + REQUEST stock in, stock out, adjustments and transfers for their shop (owner approves).
+ * Roles: Staff   = look up; Sold today is a REQUEST approved by a Manager of that shop or an Admin.
+ *        Manager = record sales directly, approve Staff sales and confirm arriving transfers for their shops,
+ *                  REQUEST stock in, stock out, adjustments and transfers (an Admin approves).
  *        Admin   = everything directly, and approves requests.
  * Only Admins change stock counts directly. Column G lists the extra shops a Manager may work for (requests + sales).
  */
@@ -390,6 +391,7 @@ function api_recordSales(auth, lines, note, shop) {
   var u = checkUser_(auth), code = shopFor_(u, shop);
   lines = cleanLines_(lines);
   if (lines.some(function (l) { return !l.rcpt; })) throw new Error('Receipt number is required for every frame sold.');
+  if (!u.admin && !u.manager) return createRequest_(u, code, 'SOLD', lines, note || '');
   return withLock_(function () {
     var st = loadStock_(), t = new Date(), out = [];
     lines.forEach(function (l) {
@@ -476,6 +478,7 @@ function api_decideTransfer(auth, id, approve) {
 /** Step 3 (receiving shop): frames arrived -> added to the receiving shop. */
 function api_receiveTransfer(auth, id) {
   var u = checkUser_(auth);
+  needManager_(u, 'confirm a transfer arrived');
   return withLock_(function () {
     var st = loadStock_(), t = new Date(), out = [];
     editTransfer_(id, 'IN TRANSIT', function (r) {
@@ -659,9 +662,9 @@ function createRequest_(u, shop, type, lines, reason) {
       if (i == null) i = -1;
       var key = i >= 0 ? String(st.rows[i][C.SKU]) : skuKey(l.model, l.colour, l.size);
       if (!key) return;
-      if (i < 0 && type !== 'STOCK IN') throw new Error('Not in the stock list: ' + key);
+      if (i < 0 && type !== 'STOCK IN' && type !== 'SOLD') throw new Error('Not in the stock list: ' + key);
       rows.push([id, t, shop, type, key, Number(l.qty) || 0, reason || '', 'PENDING', u.name, '', '',
-        JSON.stringify({ uid: u.id, model: l.model || '', colour: l.colour || '', size: l.size || '', upc: l.upc || '', desc: l.desc || '' })]);
+        JSON.stringify({ uid: u.id, model: l.model || '', colour: l.colour || '', size: l.size || '', upc: l.upc || '', desc: l.desc || '', rcpt: l.rcpt || '' })]);
     });
     if (!rows.length) throw new Error('Add at least one frame.');
     var sh = sheetOrCreate_(SHEET_REQ, REQ_HEAD);
@@ -676,7 +679,7 @@ function requests_() {
     .map(function (r) {
       var d = {}; try { d = JSON.parse(r[R.DET] || '{}'); } catch (e) {}
       return { id: String(r[R.ID]), requested: fmt_(r[R.REQ]), shop: String(r[R.SHOP]), type: String(r[R.TYPE]), sku: String(r[R.SKU]),
-        qty: Number(r[R.QTY]) || 0, reason: String(r[R.REASON] || ''), status: String(r[R.STATUS]), by: String(r[R.BY]), uid: d.uid || '',
+        qty: Number(r[R.QTY]) || 0, reason: String(r[R.REASON] || ''), status: String(r[R.STATUS]), by: String(r[R.BY]), uid: d.uid || '', rcpt: d.rcpt || '',
         decidedBy: String(r[R.DECBY] || ''), decidedAt: fmt_(r[R.DECAT]) };
     });
 }
@@ -690,8 +693,16 @@ function editRequest_(id, fn) {
 }
 
 /** Owner approves (stock moves now) or rejects a Manager's request. */
+/** Admins decide every request; a Manager decides Staff sales (SOLD) for the shops they work for. */
+function canDecide_(u, type, shop) {
+  if (u.admin) return true;
+  return u.manager && type === 'SOLD' && allowedShops_(u).indexOf(shop) >= 0;
+}
 function api_decideRequest(auth, id, approve) {
-  var u = checkAdmin_(auth);
+  var u = checkUser_(auth);
+  requests_().filter(function (r) { return r.id === id && r.status === 'PENDING'; }).forEach(function (r) {
+    if (!canDecide_(u, r.type, r.shop)) throw new Error(u.manager ? 'Only an Admin can approve this request.' : 'Only the owner (Admin) can do this.');
+  });
   return withLock_(function () {
     var t = new Date();
     if (!approve) {
@@ -703,10 +714,11 @@ function api_decideRequest(auth, id, approve) {
       var d = {}; try { d = JSON.parse(r[R.DET] || '{}'); } catch (e) {}
       var shop = String(r[R.SHOP]), type = String(r[R.TYPE]), q = Number(r[R.QTY]) || 0;
       if (st.col[shop] == null) throw new Error('Unknown shop ' + shop);
-      var i = resolve_(st, { sku: r[R.SKU], model: d.model, colour: d.colour, size: d.size, upc: d.upc, desc: d.desc }, type === 'STOCK IN');
+      var i = resolve_(st, { sku: r[R.SKU], model: d.model, colour: d.colour, size: d.size, upc: d.upc, desc: d.desc }, type === 'STOCK IN' || type === 'SOLD');
       if (i < 0) throw new Error('SKU not found: ' + r[R.SKU]);
       var who = String(r[R.BY]), note = String(r[R.REASON] || '') + ' · approved by ' + u.name;
       if (type === 'STOCK IN') out.push([t, shop, 'RECEIVE', st.rows[i][C.SKU], q, addQty_(st, i, shop, q), id, who, note]);
+      else if (type === 'SOLD') out.push([t, shop, 'SOLD', st.rows[i][C.SKU], -q, addQty_(st, i, shop, -q), d.rcpt || id, who, note]);
       else if (type === 'STOCK OUT') out.push([t, shop, 'STOCK OUT', st.rows[i][C.SKU], -q, addQty_(st, i, shop, -q), id, who, note]);
       else if (type === 'ADJUST') {
         var c = st.col[shop], before = Number(st.rows[i][c]) || 0;
@@ -737,17 +749,17 @@ function api_cancelRequest(auth, id) {
 /** Movements by other people since the owner last looked, plus what is waiting for approval. */
 function api_notifications(auth) {
   var u = checkUser_(auth);
-  if (!u.admin) return { unread: 0, pending: 0, rows: [] };
+  if (!u.admin && !u.manager) return { unread: 0, pending: 0, rows: [] };
   var seen = Number(PropertiesService.getScriptProperties().getProperty('seen_' + u.id) || 0);
-  var mine = u.name.toLowerCase();
-  var rows = logRows_().filter(function (x) { return x.staff.toLowerCase() !== mine; });
+  var mine = u.name.toLowerCase(), shops = allowedShops_(u);
+  var rows = logRows_().filter(function (x) { return x.staff.toLowerCase() !== mine && shops.indexOf(x.shop) >= 0; });
   var unread = rows.filter(function (x) { return x.t.getTime() > seen; }).length;
   var recent = rows.slice(-60).reverse().map(function (x) {
     return { time: x.time, shop: x.shop, type: x.type, sku: x.sku, qty: x.qty, bal: x.bal, staff: x.staff, note: x.note, ref: x.ref, unread: x.t.getTime() > seen };
   });
   var pend = {};
-  requests_().forEach(function (r) { if (r.status === 'PENDING') pend[r.id] = 1; });
-  transfers_().forEach(function (t) { if (t.status === 'PENDING') pend[t.id] = 1; });
+  requests_().forEach(function (r) { if (r.status === 'PENDING' && canDecide_(u, r.type, r.shop)) pend[r.id] = 1; });
+  if (u.admin) transfers_().forEach(function (t) { if (t.status === 'PENDING') pend[t.id] = 1; });
   return { unread: unread, pending: Object.keys(pend).length, rows: recent };
 }
 

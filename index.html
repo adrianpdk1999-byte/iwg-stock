@@ -139,7 +139,7 @@ b.neg{color:var(--bad)}
 
 <script>
 /* Watchdog: a separate script, so it still runs if the main script fails. Shows the error on screen. */
-window.SF_VERSION = '2026-11-16a';
+window.SF_VERSION = '2026-11-16b';
 window.SF_ERRORS = [];
 window.addEventListener('error', function (e) {
   window.SF_ERRORS.push((e.message || 'Error') + (e.lineno ? ' (line ' + e.lineno + ')' : ''));
@@ -274,27 +274,30 @@ const myShops = () => S.data.shops.filter(s => myShopCodes().includes(s.code));
 /** "Working for" selector, shown only to people who may work for more than one shop. */
 const workSel = () => myShops().length > 1 ? `<div class="row worksel"><span class="muted">Working for</span><select id="actShop">${myShops().map(s => `<option value="${esc(s.code)}" ${S.shop===s.code?'selected':''}>${esc(s.name)}</option>`).join('')}</select></div>` : '';
 const isMgr = () => !!(S.auth && S.auth.role==='Manager');
+const isStaff = () => !!(S.auth && !isAdmin() && !isMgr());
 const canStock = () => isAdmin() || isMgr();          // stock in / out / transfer (Managers: request only)
 const sendWord = () => isAdmin() ? '' : 'Send for approval: ';
 /** Manager requests grouped by ID: {id, shop, type, status, requested, by, uid, reason, decidedBy, lines:[{sku,qty}]} */
 function requestGroups(){
   const g = {};
-  (S.data.requests||[]).forEach(r => { const x = g[r.id] || (g[r.id] = Object.assign({}, r, {lines:[]})); x.lines.push({sku:r.sku, qty:r.qty}); });
+  (S.data.requests||[]).forEach(r => { const x = g[r.id] || (g[r.id] = Object.assign({}, r, {lines:[]})); x.lines.push({sku:r.sku, qty:r.qty, rcpt:r.rcpt||''}); });
   return Object.values(g).sort((a,b) => b.id.localeCompare(a.id));
 }
 function reqCard(g, buttons){
-  const what = {'STOCK IN':'Stock in', 'STOCK OUT':'Stock out', 'ADJUST':'Adjust to counted'}[g.type] || g.type;
+  const what = {'SOLD':'Sold', 'STOCK IN':'Stock in', 'STOCK OUT':'Stock out', 'ADJUST':'Adjust to counted'}[g.type] || g.type;
   return `<div class="card"><div class="row" style="justify-content:space-between;align-items:flex-start">
       <div><b>${esc(what)} · ${esc(shopName(g.shop))}</b><div class="muted">${esc(g.id)} · ${esc(g.requested)} · by ${esc(g.by)}</div>
       ${g.reason ? `<div class="muted">Reason: ${esc(g.reason)}</div>` : ''}</div>
       <span class="tag ${g.status==='APPROVED'?'ok':g.status==='PENDING'?'new':'bad'}">${esc(g.status)}</span></div>
     ${g.lines.map(l => { const it = S.bySku[l.sku], now = it ? (it.qty[g.shop]||0) : 0;
-      return `<div class="line"><div class="sku">${dotSku(l.sku)}${it ? '' : ' <span class="tag new">NEW</span>'}</div>
-        <div>${g.type==='ADJUST' ? `${now} → <b>${l.qty}</b>` : (g.type==='STOCK OUT' ? '−' : '+') + l.qty}${g.status==='PENDING' && g.type!=='ADJUST' ? ` <span class="muted">(has ${now})</span>` : ''}</div></div>`; }).join('')}
+      return `<div class="line"><div><div class="sku">${dotSku(l.sku)}${it ? '' : ' <span class="tag new">NEW</span>'}</div>${l.rcpt ? `<div class="muted">Receipt ${esc(l.rcpt)}</div>` : ''}</div>
+        <div>${g.type==='ADJUST' ? `${now} → <b>${l.qty}</b>` : (g.type==='STOCK OUT' || g.type==='SOLD' ? '−' : '+') + l.qty}${g.status==='PENDING' && g.type!=='ADJUST' ? ` <span class="muted">(has ${now})</span>` : ''}</div></div>`; }).join('')}
     ${g.decidedBy ? `<div class="muted">${g.status==='CANCELLED'?'Cancelled':g.status==='REJECTED'?'Rejected':'Approved'} by ${esc(g.decidedBy)} · ${esc(g.decidedAt)}</div>` : ''}
     ${buttons ? `<p class="row" style="margin:10px 0 0">${buttons}</p>` : ''}</div>`;
 }
-const reqButtons = g => g.status!=='PENDING' ? '' : isAdmin()
+/** Admin: any request. Manager: Staff sales at their shops. */
+const canDecide = g => isAdmin() || (isMgr() && g.type==='SOLD' && myShopCodes().includes(g.shop));
+const reqButtons = g => g.status!=='PENDING' ? '' : canDecide(g)
   ? `<button class="btn small" data-act="rqApprove" data-id="${esc(g.id)}">Approve</button><button class="btn alt small" data-act="rqReject" data-id="${esc(g.id)}">Reject</button>`
   : (g.uid===S.auth.id ? `<button class="btn alt small" data-act="rqCancel" data-id="${esc(g.id)}">Cancel request</button>` : '');
 /** Pending requests for one shop and type(s), shown on the page where they were made. */
@@ -367,8 +370,8 @@ function render(){
   if (S.tab==='recv' && !canStock()) S.tab = 'find';
   document.querySelector('nav [data-tab=recv]').hidden = !canStock();
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab===S.tab));
-  const bell = $('#bell'); bell.hidden = !isAdmin();
-  if (isAdmin()){ const n = S.notif ? S.notif.unread + S.notif.pending : 0; bell.innerHTML = '🔔' + (n ? `<i class="badge">${n > 99 ? '99+' : n}</i>` : ''); }
+  const bell = $('#bell'); bell.hidden = !(isAdmin() || isMgr());
+  if (isAdmin() || isMgr()){ const n = S.notif ? S.notif.unread + S.notif.pending : 0; bell.innerHTML = '🔔' + (n ? `<i class="badge">${n > 99 ? '99+' : n}</i>` : ''); }
   const todo = xferTodo(), xb = document.querySelector('nav [data-tab=xfer]');
   xb.innerHTML = `<span>🔁</span>Transfer${todo ? `<i class="badge">${todo}</i>` : ''}`;
   app.innerHTML = ({find:findView, sold:soldView, recv:recvView, xfer:xferView, report:reportView, more:moreView})[S.tab]();
@@ -453,11 +456,13 @@ function soldView(){
   const d = new Date().toLocaleDateString([], {weekday:'short', day:'numeric', month:'short'});
   return `<h2>Sold today · ${esc(shopName(S.shop))}</h2>${workSel()}
     <p class="muted">At closing, add every Ray-Ban and Oakley frame sold today (${esc(d)}). The list is kept on this phone until you save it.</p>
+    ${isStaff() ? `<div class="msg warn">Your sales are sent to the shop's Manager for approval. Stock is deducted when they approve.</div>` : ''}
     ${lineEditor('sold', true)}
     <p class="muted" style="margin:4px 0 0">Every frame needs its receipt number. Two frames on one receipt: type the same number on both.</p>
     <label>Note (optional)</label><input id="note" value="${esc(S.note)}" placeholder="e.g. paid by card">
     ${msg('sold')}
-    <p><button class="btn wide" data-act="saveSold" ${S.busy||!S.lines.sold.length?'disabled':''}>Save sales &amp; deduct stock</button></p>`;
+    <p><button class="btn wide" data-act="saveSold" ${S.busy||!S.lines.sold.length?'disabled':''}>${isStaff() ? 'Send sales for approval' : 'Save sales &amp; deduct stock'}</button></p>
+    ${isStaff() ? myPending(['SOLD']) : ''}`;
 }
 
 function recvView(){
@@ -510,7 +515,7 @@ function xferView(){
   const sec = (title, list, btns) => list.length ? `<h2>${title}</h2>` + list.map(g => xferCard(g, btns && btns(g))).join('') : '';
   return `${workSel()}${msg('xferAct')}
     ${sec('Waiting for your approval', approvals, g => `<button class="btn small" data-act="approve" data-id="${esc(g.id)}">Approve</button><button class="btn alt small" data-act="reject" data-id="${esc(g.id)}">Reject</button>`)}
-    ${sec('Arriving at ' + esc(shopName(me)), incoming, g => `<button class="btn small" data-act="received" data-id="${esc(g.id)}">Received, add to our stock</button>`)}
+    ${sec('Arriving at ' + esc(shopName(me)), incoming, g => canStock() ? `<button class="btn small" data-act="received" data-id="${esc(g.id)}">Received, add to our stock</button>` : '<span class="muted">Your Manager confirms when it arrives.</span>')}
     ${sec('Sent from ' + esc(shopName(me)), mine, g => g.status==='PENDING' ? `<button class="btn alt small" data-act="cancelX" data-id="${esc(g.id)}">Cancel request</button>` : '')}
     ${sec('Other shops in transit', otherOpen, g => `<button class="btn alt small" data-act="received" data-id="${esc(g.id)}">Mark received</button>`)}
     ${canStock() ? `<h2>Request a transfer from ${esc(shopName(me))}</h2>
@@ -547,9 +552,10 @@ const adjShops = () => isAdmin() ? S.data.shops : isMgr() ? myShops() : [];
 const seeAllShops = () => myShops().length > 1;
 const shopOpts = (sel, list, all) => (all ? `<option value="">${esc(all)}</option>` : '') + list.map(s => `<option value="${esc(s.code)}" ${sel===s.code?'selected':''}>${esc(s.name)}</option>`).join('');
 function reportView(){
-  const nPend = requestGroups().filter(g => g.status==='PENDING').length;
+  const nPend = requestGroups().filter(g => g.status==='PENDING' && canDecide(g)).length;
   const tabs = [['export','Export'],['adjust','Adjust'],['activity','Activity']]
-    .concat(isAdmin() ? [['requests', 'Approvals' + (nPend ? ` (${nPend})` : '')], ['import','Import']] : isMgr() ? [['requests','My requests']] : []);
+    .concat(isAdmin() ? [['requests', 'Approvals' + (nPend ? ` (${nPend})` : '')], ['import','Import']]
+      : isMgr() ? [['requests', 'Approvals' + (nPend ? ` (${nPend})` : '')]] : [['requests','My requests']]);
   const seg = `<div class="seg">${tabs.map(([k,l]) => `<button data-act="rep" data-r="${k}" class="${S.rep===k?'on':''}">${l}</button>`).join('')}</div>`;
   const body = ({export:exportView, adjust:adjustView, activity:activityView, import:importView, requests:requestsView})[S.rep] || exportView;
   return `<h2>Report</h2>${seg}${body()}`;
@@ -566,13 +572,14 @@ function shopSummary(){
     <tr><td><b>All shops</b></td><td>${tot.models}</td><td><b>${tot.frames}</b></td><td>${tot.neg}</td><td></td></tr></table></div>`;
 }
 function requestsView(){
-  const G = requestGroups().filter(g => isAdmin() || myShopCodes().includes(g.shop));
-  const pend = G.filter(g => g.status==='PENDING'), done = G.filter(g => g.status!=='PENDING').slice(0, 15);
+  const G = requestGroups().filter(g => isAdmin() || g.uid===S.auth.id || (isMgr() && myShopCodes().includes(g.shop)));
+  const toMe = G.filter(g => g.status==='PENDING' && canDecide(g)), mine = G.filter(g => g.status==='PENDING' && !canDecide(g));
+  const pend = toMe.concat(mine), done = G.filter(g => g.status!=='PENDING').slice(0, 15);
   const tp = isAdmin() ? transferGroups().filter(g => g.status==='PENDING').length : 0;
   return `${msg('rq')}
     ${tp ? `<div class="msg warn">${tp} transfer request${tp===1?'':'s'} waiting too. <a href="#" data-tab="xfer">Open Transfer tab</a></div>` : ''}
-    <h2 style="font-size:15px">${isAdmin() ? 'Waiting for your approval' : 'Waiting for the owner'}</h2>
-    ${pend.map(g => reqCard(g, reqButtons(g))).join('') || '<p class="muted">Nothing waiting.</p>'}
+    ${isStaff() ? '' : `<h2 style="font-size:15px">Waiting for your approval</h2>${toMe.map(g => reqCard(g, reqButtons(g))).join('') || '<p class="muted">Nothing waiting.</p>'}`}
+    ${mine.length || isStaff() ? `<h2 style="font-size:15px">${isStaff() ? 'Your requests waiting' : 'Your requests waiting for an Admin'}</h2>${mine.map(g => reqCard(g, reqButtons(g))).join('') || '<p class="muted">Nothing waiting.</p>'}` : ''}
     ${done.length ? `<h2 style="font-size:15px">Recently decided</h2>${done.map(g => reqCard(g)).join('')}` : ''}`;
 }
 /** Shop columns chosen for the export (default: every shop). */
@@ -883,14 +890,15 @@ document.addEventListener('click', async e => {
     L.forEach((l, i) => { const r = String(l.rcpt).trim(); (groups[r] = groups[r] || []).push(i); });
     if (!confirm(`Deduct ${n} frame(s) sold today from ${shopName(S.shop)}?\n${Object.keys(groups).length} receipt(s): ${Object.keys(groups).join(', ')}`)) return;
     S.busy = true; S.msg.sold = null; render();
-    const all = linesForServer('sold'); let saved = 0, done = [];
+    const all = linesForServer('sold'); let saved = 0, done = [], sentIds = [];
     try {
       for (const [r, idx] of Object.entries(groups)){
         const res = await call('api_recordSales', S.auth, idx.map(i => Object.assign({}, all[i], {rcpt:r})), 'Receipt ' + r + (S.note ? ' · ' + S.note : ''), S.shop);
-        saved += res.saved; done = done.concat(idx);
+        saved += res.pending ? res.lines : res.saved; if (res.pending) sentIds.push(res.id); done = done.concat(idx);
       }
       S.lines.sold = []; S.note = ''; S.rcptCheck = false;
-      S.msg.sold = {t:'ok', s:`Saved ${saved} line(s) on ${Object.keys(groups).length} receipt(s). Stock updated.`};
+      S.msg.sold = {t:'ok', s: sentIds.length ? `Sent ${saved} line(s) on ${Object.keys(groups).length} receipt(s) for approval (${sentIds.join(', ')}). Stock is deducted when the Manager approves.`
+        : `Saved ${saved} line(s) on ${Object.keys(groups).length} receipt(s). Stock updated.`};
     } catch(err){
       S.lines.sold = L.filter((l, i) => !done.includes(i));
       S.msg.sold = {t:'err', s:'Not all saved: ' + err.message + (done.length ? ` (${done.length} line(s) were saved and removed from the list)` : '')};
@@ -1019,7 +1027,7 @@ function showSugg(inp){
 
 /* ---------- owner notifications ---------- */
 async function refreshNotif(){
-  if (!isAdmin()) return;
+  if (!isAdmin() && !isMgr()) return;
   try { S.notif = await call('api_notifications', S.auth); if (S.data && S.auth) render(); } catch(e){}
 }
 async function openNotif(){

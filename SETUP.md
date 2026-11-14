@@ -13,8 +13,8 @@ Staff can see straight away which shop has a frame. It does not depend on any PO
 ### Logins, cost codes, transfers
 - **Users tab**: one row per person: `UserID | Name | Shop | Password | Role (Staff/Admin) | Active (Y/N)`. Set Active to `N` to block someone. Change a password by editing the cell; that person is logged out on their next refresh.
 - **Roles (Users tab, Role column)**:
-  - **Staff**: look up stock, record sales (Sold today), confirm arrival of approved transfers.
-  - **Manager**: Staff + *request* stock in, stock out (non-sale removals), adjustments and transfers for their shops (column G). Nothing moves until an Admin approves.
+  - **Staff** (one view login per shop): look up stock and reports. Sold today is sent as a request; the shop's Manager or an Admin approves it before stock is deducted.
+  - **Manager**: records sales directly; approves Staff sales and confirms arriving transfers for their shops (own shop + column G); *requests* stock in, stock out, adjustments and transfers, which an Admin approves. Gets a 🔔 for their shops.
   - **Admin**: everything directly; approves or rejects requests (Report → Approvals, Transfer tab). Only Admins change stock counts directly.
 - **Requests tab**: every Manager request with status (PENDING / APPROVED / REJECTED / CANCELLED), who asked and who decided.
 - **Notifications**: the owner's 🔔 shows movements by anyone else since last opened, plus requests waiting. It refreshes every minute while the app is open.
