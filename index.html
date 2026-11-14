@@ -57,6 +57,9 @@ label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
 .chip.me{outline:2px solid var(--accent)}
 .code{display:inline-block;font-weight:800;letter-spacing:1px;color:var(--ink);background:var(--chip);border-radius:6px;padding:0 6px;margin-left:4px}
 .rsp{font-weight:800;margin-top:2px}
+.chkgrid{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px}
+.chk{display:flex;align-items:center;gap:8px;margin:4px 0;color:var(--ink);font-size:14px}
+.chk input{width:auto;margin:0}
 .worksel{gap:8px;margin:4px 0 6px}.worksel select{flex:1;padding:8px 10px}
 .dot{display:inline-block;font-size:1.35em;line-height:0;vertical-align:-0.08em;margin:0 .32em;color:var(--accent)}
 .brands{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
@@ -136,7 +139,7 @@ b.neg{color:var(--bad)}
 
 <script>
 /* Watchdog: a separate script, so it still runs if the main script fails. Shows the error on screen. */
-window.SF_VERSION = '2026-11-15c';
+window.SF_VERSION = '2026-11-16a';
 window.SF_ERRORS = [];
 window.addEventListener('error', function (e) {
   window.SF_ERRORS.push((e.message || 'Error') + (e.lineno ? ' (line ' + e.lineno + ')' : ''));
@@ -242,9 +245,10 @@ const S = {
   lines: { sold: store.get('sf_sold', []), recv: store.get('sf_recv', []), xfer: store.get('sf_xfer', []), adj: store.get('sf_adj', []), out: store.get('sf_out', []) },
   io: 'in', outReason: 'Return to supplier', notif: null, rq: 'pending',
   rep: 'export', adjShop: '', adjReason: 'Stock-take count', adjNote: '', act: null,
-  ex: {shop:'', brand:'', only:true}, af: {shop:'', type:'', from:'', to:'', q:''},
+  ex: Object.assign({shops:null, brand:'', only:true, cost:true, rsp:true, total:true, type:false, coming:false}, store.get('sf_ex', {})), af: {shop:'', type:'', from:'', to:'', q:''},
   ref: '', toShop: '', note: '', ocrText: '', msg: {}, busy: false, imp: null
 };
+const saveEx = () => store.set('sf_ex', {shops:S.ex.shops, brand:S.ex.brand, only:S.ex.only, cost:S.ex.cost, rsp:S.ex.rsp, total:S.ex.total, type:S.ex.type, coming:S.ex.coming});
 const saveLines = k => store.set('sf_' + k, S.lines[k]);
 
 async function loadData(){
@@ -571,20 +575,27 @@ function requestsView(){
     ${pend.map(g => reqCard(g, reqButtons(g))).join('') || '<p class="muted">Nothing waiting.</p>'}
     ${done.length ? `<h2 style="font-size:15px">Recently decided</h2>${done.map(g => reqCard(g)).join('')}` : ''}`;
 }
+/** Shop columns chosen for the export (default: every shop). */
+const exShops = () => { const e = S.ex, all = S.data.shops; return e.shops ? all.filter(x => e.shops.includes(x.code)) : all; };
+const exChk = (id, on, label) => `<label class="chk"><input type="checkbox" id="${id}" ${on?'checked':''}> ${label}</label>`;
 function exportView(){
-  const e = S.ex, n = exportItems().length;
+  const e = S.ex, n = exportItems().length, sel = exShops();
   return `<h2 style="font-size:15px">Stock by shop</h2>${shopSummary()}
     <h2 style="font-size:15px">Export stock list</h2><div class="card">
-      <label>Shop</label><select id="exShop">${shopOpts(e.shop, S.data.shops, 'All shops')}</select>
+      <label>Shops to include (one count column each)</label>
+      <div class="chkgrid">${S.data.shops.map(x => exChk('exS_' + x.code, sel.some(y => y.code===x.code), esc(x.name))).join('')}</div>
+      <p class="row" style="margin:6px 0 0"><button class="btn alt small" data-act="exAll">Select all</button><button class="btn alt small" data-act="exNone">Clear</button></p>
+      <label>Other columns</label>
+      <div class="chkgrid">${exChk('exCost', e.cost, 'Cost code')}${exChk('exRsp', e.rsp, 'RSP')}${exChk('exTotal', e.total, 'Total of chosen shops')}${exChk('exType', e.type, 'Type (sun / optical)')}${exChk('exComing', e.coming, 'Coming (in transit)')}</div>
       <label>Brand</label><select id="exBrand"><option value="">All brands</option>${brands().map(b => `<option ${e.brand===b?'selected':''}>${esc(b)}</option>`).join('')}</select>
-      <label class="row" style="color:var(--ink)"><input type="checkbox" id="exOnly" ${e.only?'checked':''} style="width:auto"> Only frames in stock${e.shop ? ' at this shop' : ''}</label>
-      <p class="muted">${n} model${n===1?'':'s'} will be exported, with cost code, RSP and every shop's count.</p>
-      <button class="btn wide" data-act="exStock" ${n?'':'disabled'}>⬇ Download Excel</button>${msg('ex')}</div>`;
+      <label class="chk" style="margin-top:10px"><input type="checkbox" id="exOnly" ${e.only?'checked':''}> Only frames that the chosen shop${sel.length===1?'':'s'} have</label>
+      <p class="muted">${sel.length ? `${n} model${n===1?'':'s'} · columns: SKU, Brand, Model, Colour, Size${e.type?', Type':''}${e.cost?', Cost code':''}${e.rsp?', RSP':''}, ${sel.map(x => esc(shortName(x.code))).join(', ')}${e.total && sel.length>1?', Total':''}${e.coming?', Coming':''}` : 'Choose at least one shop.'}</p>
+      <button class="btn wide" data-act="exStock" ${n && sel.length?'':'disabled'}>⬇ Download Excel</button>${msg('ex')}</div>`;
 }
 function exportItems(){
-  const e = S.ex;
-  return S.data.items.filter(it => (!e.brand || it.brand===e.brand) &&
-    (!e.only || (e.shop ? (it.qty[e.shop]||0) !== 0 : it.total !== 0 || Object.values(it.qty).some(q => q))) ).sort((a,b) => a.sku.localeCompare(b.sku));
+  const e = S.ex, sel = exShops().map(x => x.code);
+  return S.data.items.filter(it => (!e.brand || it.brand===e.brand) && (!e.only || sel.some(c => (it.qty[c]||0) !== 0)))
+    .sort((a,b) => a.sku.localeCompare(b.sku));
 }
 function adjustView(){
   if (!canAdj() && !isMgr()) return `<div class="msg warn">You are not authorised to adjust stock. The owner can give access in the Users tab of the Sheet (Adjust column).</div>`;
@@ -634,15 +645,19 @@ async function ensureXLSX(){ if (!window.XLSX) await loadScript('https://cdnjs.c
 function stamp(){ const d = new Date(), p = n => String(n).padStart(2,'0'); return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`; }
 async function exportStock(){
   await ensureXLSX();
-  const e = S.ex, shops = S.data.shops, items = exportItems();
-  const head = ['SKU','Brand','Model','Colour','Size','Type','Cost code','RSP (RM)', ...shops.map(s => s.name), 'Total', 'Coming'];
-  const rows = items.map(it => [it.sku, it.brand, it.model, it.colour, it.size, it.desc, it.cost, it.rsp || '', ...shops.map(s => it.qty[s.code]||0), it.total,
-    Object.values(it.transit||{}).reduce((a,b)=>a+b,0) || '']);
-  const title = [[`Stock list · ${e.shop ? shopName(e.shop) : 'All shops'} · ${e.brand || 'All brands'} · exported ${new Date().toLocaleString()} by ${S.auth.name}`], []];
+  const e = S.ex, sel = exShops(), items = exportItems(), many = sel.length > 1;
+  const head = ['SKU','Brand','Model','Colour','Size'].concat(e.type ? ['Type'] : [], e.cost ? ['Cost code'] : [], e.rsp ? ['RSP (RM)'] : [],
+    sel.map(x => x.name), e.total && many ? ['Total'] : [], e.coming ? ['Coming'] : []);
+  const rows = items.map(it => { const q = sel.map(x => it.qty[x.code]||0);
+    return [it.sku, it.brand, it.model, it.colour, it.size].concat(e.type ? [it.desc] : [], e.cost ? [it.cost] : [], e.rsp ? [it.rsp || ''] : [],
+      q, e.total && many ? [q.reduce((a,b) => a+b, 0)] : [], e.coming ? [sel.reduce((a,x) => a + ((it.transit||{})[x.code]||0), 0) || ''] : []); });
+  const who = sel.length === S.data.shops.length ? 'All shops' : sel.map(x => x.name).join(', ');
+  const title = [[`Stock list · ${who} · ${e.brand || 'All brands'} · exported ${new Date().toLocaleString()} by ${S.auth.name}`], []];
   const ws = XLSX.utils.aoa_to_sheet(title.concat([head], rows));
   ws['!cols'] = head.map((h, i) => ({wch: i===0 ? 22 : Math.max(8, String(h).length + 2)}));
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Stock');
-  XLSX.writeFile(wb, `Stock-${(e.shop||'ALL')}${e.brand ? '-' + e.brand : ''}-${stamp()}.xlsx`);
+  const tag = sel.length === S.data.shops.length ? 'ALL' : sel.length <= 3 ? sel.map(x => x.code).join('-') : sel.length + 'shops';
+  XLSX.writeFile(wb, `Stock-${tag}${e.brand ? '-' + e.brand : ''}-${stamp()}.xlsx`);
 }
 async function exportActivity(){
   await ensureXLSX();
@@ -801,6 +816,7 @@ document.addEventListener('click', async e => {
   if (a==='bell'){ openNotif(); return; }
   if (a==='notifGo'){ $('#sheet').innerHTML = ''; S.tab = 'report'; S.rep = 'requests'; render(); return; }
   if (a==='rep'){ S.rep = t.dataset.r; S.msg = {}; render(); return; }
+  if (a==='exAll' || a==='exNone'){ S.ex.shops = a==='exAll' ? null : []; saveEx(); render(); return; }
   if (a==='exStock'){ try { await exportStock(); S.msg.ex = {t:'ok', s:'Excel file downloaded.'}; } catch(err){ S.msg.ex = {t:'err', s:'Export failed: ' + err.message}; } render(); return; }
   if (a==='exAct'){ try { await exportActivity(); } catch(err){ S.msg.act = {t:'err', s:'Export failed: ' + err.message}; render(); } return; }
   if (a==='actShow'){
@@ -949,9 +965,11 @@ document.addEventListener('change', async e => {
   if (t.id==='only'){ S.onlyStock = t.checked; S.page = 1; renderResults(); }
   if (t.id==='toShop') S.toShop = t.value;
   if (t.dataset.f==='count') render();
-  if (t.id==='exShop'){ S.ex.shop = t.value; render(); }
-  if (t.id==='exBrand'){ S.ex.brand = t.value; render(); }
-  if (t.id==='exOnly'){ S.ex.only = t.checked; render(); }
+  if (t.id && t.id.indexOf('exS_')===0){ const code = t.id.slice(4), cur = exShops().map(x => x.code);
+    S.ex.shops = t.checked ? cur.concat(code) : cur.filter(c => c !== code); saveEx(); render(); }
+  const exOpt = {exCost:'cost', exRsp:'rsp', exTotal:'total', exType:'type', exComing:'coming', exOnly:'only'}[t.id];
+  if (exOpt){ S.ex[exOpt] = t.checked; saveEx(); render(); }
+  if (t.id==='exBrand'){ S.ex.brand = t.value; saveEx(); render(); }
   if (t.id==='adjShop'){ S.adjShop = t.value; render(); }
   if (t.id==='adjReason') S.adjReason = t.value;
   if (t.id==='outReason') S.outReason = t.value;
