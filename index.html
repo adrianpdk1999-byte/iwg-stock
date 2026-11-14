@@ -57,6 +57,7 @@ label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
 .chip.me{outline:2px solid var(--accent)}
 .code{display:inline-block;font-weight:800;letter-spacing:1px;color:var(--ink);background:var(--chip);border-radius:6px;padding:0 6px;margin-left:4px}
 .rsp{font-weight:800;margin-top:2px}
+.worksel{gap:8px;margin:4px 0 6px}.worksel select{flex:1;padding:8px 10px}
 .dot{display:inline-block;font-size:1.35em;line-height:0;vertical-align:-0.08em;margin:0 .32em;color:var(--accent)}
 .brands{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
 .brands button{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:6px 14px;font-weight:700;font-size:14px}
@@ -135,7 +136,7 @@ b.neg{color:var(--bad)}
 
 <script>
 /* Watchdog: a separate script, so it still runs if the main script fails. Shows the error on screen. */
-window.SF_VERSION = '2026-11-15a';
+window.SF_VERSION = '2026-11-15b';
 window.SF_ERRORS = [];
 window.addEventListener('error', function (e) {
   window.SF_ERRORS.push((e.message || 'Error') + (e.lineno ? ' (line ' + e.lineno + ')' : ''));
@@ -250,7 +251,7 @@ async function loadData(){
   const d = await call('api_getData', S.auth);
   S.data = d; S.bySku = {}; S.byUpc = {};
   Object.assign(S.auth, d.user); store.set('sf_auth2', S.auth);
-  if (!isAdmin() || !d.shops.some(x => x.code===S.shop)) S.shop = d.user.shop || (d.shops[0]||{}).code;
+  { const ok = myShopCodes(); if (!ok.includes(S.shop)) S.shop = ok.includes(d.user.shop) ? d.user.shop : (ok[0] || d.user.shop || (d.shops[0]||{}).code); }
   store.set('sf_shop', S.shop);
   d.items.forEach(it => {
     it.total = Object.values(it.qty).reduce((a,b) => a+b, 0);
@@ -262,6 +263,12 @@ async function loadData(){
 const shopName = c => ((S.data.shops.find(s => s.code===c)||{}).name) || c;
 const shortName = c => shopName(c).replace(/\s*\(.*\)\s*$/, '');
 const isAdmin = () => !!(S.auth && S.auth.role==='Admin');
+/** Shop codes this user may work for (server decides; older server: Admin = all, others = own shop). */
+const myShopCodes = () => !S.auth || !S.data ? [] : Array.isArray(S.auth.shops) ? S.auth.shops.filter(c => S.data.shops.some(s => s.code===c))
+  : isAdmin() ? S.data.shops.map(s => s.code) : [S.auth.shop];
+const myShops = () => S.data.shops.filter(s => myShopCodes().includes(s.code));
+/** "Working for" selector, shown only to people who may work for more than one shop. */
+const workSel = () => myShops().length > 1 ? `<div class="row worksel"><span class="muted">Working for</span><select id="actShop">${myShops().map(s => `<option value="${esc(s.code)}" ${S.shop===s.code?'selected':''}>${esc(s.name)}</option>`).join('')}</select></div>` : '';
 const isMgr = () => !!(S.auth && S.auth.role==='Manager');
 const canStock = () => isAdmin() || isMgr();          // stock in / out / transfer (Managers: request only)
 const sendWord = () => isAdmin() ? '' : 'Send for approval: ';
@@ -287,8 +294,9 @@ const reqButtons = g => g.status!=='PENDING' ? '' : isAdmin()
   ? `<button class="btn small" data-act="rqApprove" data-id="${esc(g.id)}">Approve</button><button class="btn alt small" data-act="rqReject" data-id="${esc(g.id)}">Reject</button>`
   : (g.uid===S.auth.id ? `<button class="btn alt small" data-act="rqCancel" data-id="${esc(g.id)}">Cancel request</button>` : '');
 /** Pending requests for one shop and type(s), shown on the page where they were made. */
-function myPending(types){
-  const G = requestGroups().filter(g => g.status==='PENDING' && g.shop===S.shop && types.includes(g.type));
+function myPending(types, shop){
+  shop = shop || S.shop;
+  const G = requestGroups().filter(g => g.status==='PENDING' && g.shop===shop && types.includes(g.type));
   return G.length ? `<h2>Waiting for approval</h2>${G.map(g => reqCard(g, reqButtons(g))).join('')}` : '';
 }
 /** Transfers grouped into requests: {id, from, to, status, requested, by, note, approvedBy, receivedBy, lines:[{sku,qty}]} */
@@ -439,7 +447,7 @@ function lineEditor(k, allowNew){
 
 function soldView(){
   const d = new Date().toLocaleDateString([], {weekday:'short', day:'numeric', month:'short'});
-  return `<h2>Sold today · ${esc(shopName(S.shop))}</h2>
+  return `<h2>Sold today · ${esc(shopName(S.shop))}</h2>${workSel()}
     <p class="muted">At closing, add every Ray-Ban and Oakley frame sold today (${esc(d)}). The list is kept on this phone until you save it.</p>
     ${lineEditor('sold', true)}
     <p class="muted" style="margin:4px 0 0">Every frame needs its receipt number. Two frames on one receipt: type the same number on both.</p>
@@ -451,7 +459,7 @@ function soldView(){
 function recvView(){
   const seg = `<div class="seg"><button data-act="io" data-v="in" class="${S.io==='in'?'on':''}">Stock in</button><button data-act="io" data-v="out" class="${S.io==='out'?'on':''}">Stock out</button></div>`;
   const note = isMgr() ? `<div class="msg warn">As Manager, your entries are sent to the owner for approval. Stock changes only after approval.</div>` : '';
-  if (S.io==='out') return `<h2>Stock out · ${esc(shopName(S.shop))}</h2>${seg}${note}
+  if (S.io==='out') return `<h2>Stock out · ${esc(shopName(S.shop))}</h2>${workSel()}${seg}${note}
     <p class="muted">For frames leaving the shop for any reason other than a sale (sales go in Sold today).</p>
     ${myPending(['STOCK OUT'])}
     <label>Frames going out</label>
@@ -460,7 +468,7 @@ function recvView(){
     <label>Note (optional)</label><input id="note" value="${esc(S.note)}" placeholder="e.g. RA number, supplier name">
     ${msg('out')}
     <p><button class="btn wide" data-act="saveOut" ${S.busy||!S.lines.out.length?'disabled':''}>${isMgr() ? 'Send for approval' : 'Remove from ' + esc(shopName(S.shop)) + ' stock'}</button></p>`;
-  return `<h2>Stock in · ${esc(shopName(S.shop))}</h2>${seg}${note}
+  return `<h2>Stock in · ${esc(shopName(S.shop))}</h2>${workSel()}${seg}${note}
     ${myPending(['STOCK IN'])}
     <div class="card"><b>Scan the delivery order</b>
       <p class="muted" style="margin:4px 0 8px">Take clear photos of each DO page (flat, good light) or choose a PDF. The items found are added below for you to check.</p>
@@ -496,7 +504,7 @@ function xferView(){
   const otherOpen = isAdmin() ? G.filter(g => g.status==='IN TRANSIT' && g.to!==me && g.from!==me) : [];
   const recent = G.filter(g => !['PENDING','IN TRANSIT'].includes(g.status) && (isAdmin() || g.from===me || g.to===me)).slice(0, 8);
   const sec = (title, list, btns) => list.length ? `<h2>${title}</h2>` + list.map(g => xferCard(g, btns && btns(g))).join('') : '';
-  return `${msg('xferAct')}
+  return `${workSel()}${msg('xferAct')}
     ${sec('Waiting for your approval', approvals, g => `<button class="btn small" data-act="approve" data-id="${esc(g.id)}">Approve</button><button class="btn alt small" data-act="reject" data-id="${esc(g.id)}">Reject</button>`)}
     ${sec('Arriving at ' + esc(shopName(me)), incoming, g => `<button class="btn small" data-act="received" data-id="${esc(g.id)}">Received, add to our stock</button>`)}
     ${sec('Sent from ' + esc(shopName(me)), mine, g => g.status==='PENDING' ? `<button class="btn alt small" data-act="cancelX" data-id="${esc(g.id)}">Cancel request</button>` : '')}
@@ -516,9 +524,9 @@ function xferView(){
 
 function moreView(){
   return `<h2>${esc(S.auth.name)}</h2>
-    <p class="muted">User ID ${esc(S.auth.id)} · ${esc(S.auth.role)} · ${esc(shopName(S.auth.shop) || 'no home shop')}${canAdj() ? ' · can adjust ' + (S.auth.adjust==='ALL' ? 'all shops' : esc(shopName(S.auth.shop))) : ''}</p>
-    ${isAdmin() ? `<label>Working as shop</label><select id="actShop">${S.data.shops.map(s => `<option value="${esc(s.code)}" ${S.shop===s.code?'selected':''}>${esc(s.name)}</option>`).join('')}</select>
-      <p class="muted">As Admin you can record sales, deliveries and transfers for any shop.</p>` : ''}
+    <p class="muted">User ID ${esc(S.auth.id)} · ${esc(S.auth.role)} · ${esc(shopName(S.auth.shop) || 'no home shop')}</p>
+    ${myShops().length > 1 ? `<p class="muted">Works for: ${myShops().map(s => esc(s.name)).join(', ')}</p>${workSel()}
+      <p class="muted">${isAdmin() ? 'As Admin you can record and approve for any shop.' : 'Choose the shop before recording sales or sending requests.'}</p>` : ''}
     <p class="row"><button class="btn alt" data-act="logout">Log out</button></p>
     <h2>Tips</h2>
     <div class="card muted">• Search ignores spaces and the leading 0: "rb2140 901", "2140 901 50" and "0RB2140" all work.<br>
@@ -530,9 +538,9 @@ function moreView(){
 }
 
 /* ---------- Report tab ---------- */
-const canAdj = () => !!(S.auth && (S.auth.adjust==='ALL' || S.auth.adjust==='SHOP'));
-const adjShops = () => S.auth.adjust==='ALL' || isAdmin() ? S.data.shops : S.data.shops.filter(s => s.code===S.auth.shop);
-const seeAllShops = () => isAdmin() || S.auth.adjust==='ALL';
+const canAdj = () => isAdmin();                     // only Admins change counts directly
+const adjShops = () => isAdmin() ? S.data.shops : isMgr() ? myShops() : [];
+const seeAllShops = () => myShops().length > 1;
 const shopOpts = (sel, list, all) => (all ? `<option value="">${esc(all)}</option>` : '') + list.map(s => `<option value="${esc(s.code)}" ${sel===s.code?'selected':''}>${esc(s.name)}</option>`).join('');
 function reportView(){
   const nPend = requestGroups().filter(g => g.status==='PENDING').length;
@@ -554,7 +562,7 @@ function shopSummary(){
     <tr><td><b>All shops</b></td><td>${tot.models}</td><td><b>${tot.frames}</b></td><td>${tot.neg}</td><td></td></tr></table></div>`;
 }
 function requestsView(){
-  const G = requestGroups().filter(g => isAdmin() || g.shop===S.auth.shop);
+  const G = requestGroups().filter(g => isAdmin() || myShopCodes().includes(g.shop));
   const pend = G.filter(g => g.status==='PENDING'), done = G.filter(g => g.status!=='PENDING').slice(0, 15);
   const tp = isAdmin() ? transferGroups().filter(g => g.status==='PENDING').length : 0;
   return `${msg('rq')}
@@ -589,7 +597,7 @@ function adjustView(){
       <div class="qty"><span class="muted" style="font-size:12px">Counted</span><input value="${esc(l.count??'')}" inputmode="numeric" data-f="count" data-i="${i}" data-k="adj">
       <button class="x" data-act="del" data-i="${i}" data-k="adj" aria-label="Remove">×</button></div></div>`; }).join('');
   const changes = L.filter(l => { const it = S.bySku[l.sku]; return it && l.count !== '' && l.count != null && +l.count !== (it.qty[sh]||0); }).length;
-  return `${!canAdj() ? '<div class="msg warn">As Manager, adjustments are sent to the owner for approval.</div>' + myPending(['ADJUST']) : ''}<div class="card"><p class="muted" style="margin-top:0">Type the quantity you <b>actually counted</b>. The difference is recorded as an adjustment under your name with the reason.</p>
+  return `${!canAdj() ? '<div class="msg warn">As Manager, adjustments are sent to the owner for approval.</div>' + myPending(['ADJUST'], S.adjShop) : ''}<div class="card"><p class="muted" style="margin-top:0">Type the quantity you <b>actually counted</b>. The difference is recorded as an adjustment under your name with the reason.</p>
     <label>Shop</label><select id="adjShop" ${list.length<2?'disabled':''}>${shopOpts(sh, list)}</select>
     <label>Frames</label>
     <div class="sugg"><input id="add" data-k="adj" placeholder="Type model or scan UPC, then pick" autocomplete="off"><div class="list" id="sugg" hidden></div></div>
@@ -605,7 +613,7 @@ function activityView(){
   const types = [['','All activity'],['SOLD','Sales'],['RECEIVE','Deliveries'],['TRANSFER','Transfers'],['ADJUST','Adjustments'],['IMPORT','Imports']];
   const A = S.act;
   return `<div class="card">
-    ${seeAllShops() ? `<label>Shop</label><select id="afShop">${shopOpts(f.shop, S.data.shops, 'All shops')}</select>` : `<p class="muted" style="margin:0">Shop: ${esc(shopName(S.auth.shop))}</p>`}
+    ${seeAllShops() ? `<label>Shop</label><select id="afShop">${shopOpts(f.shop, myShops(), isAdmin() ? 'All shops' : 'All my shops')}</select>` : `<p class="muted" style="margin:0">Shop: ${esc(shopName(S.auth.shop))}</p>`}
     <label>Type</label><select id="afType">${types.map(([v,l]) => `<option value="${v}" ${f.type===v?'selected':''}>${l}</option>`).join('')}</select>
     <div class="row"><div class="grow"><label>From</label><input type="date" id="afFrom" value="${esc(f.from)}"></div><div class="grow"><label>To</label><input type="date" id="afTo" value="${esc(f.to)}"></div></div>
     <label>Frame, staff or reference (optional)</label><input id="afQ" value="${esc(f.q)}" placeholder="e.g. RB2140F, Aina, TR-2611">
@@ -717,7 +725,7 @@ async function openItem(sku){
       <button class="btn alt small" data-act="toXfer" data-sku="${esc(it.sku)}">+ Transfer</button>
       ${linkBtn(it)}</p>
     <div id="photoMsg"></div>
-    ${canAdj() ? `<p class="row"><button class="btn alt small" data-act="toAdj" data-sku="${esc(it.sku)}">± Adjust count</button></p>` : ''}
+    ${canAdj() || isMgr() ? `<p class="row"><button class="btn alt small" data-act="toAdj" data-sku="${esc(it.sku)}">± ${canAdj() ? 'Adjust count' : 'Request count change'}</button></p>` : ''}
     <h2>Activity</h2><div id="hist"><span class="spin"></span></div></div></div>`;
   try {
     const h = await call('api_history', S.auth, sku, 500);

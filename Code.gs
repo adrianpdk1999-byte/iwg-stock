@@ -5,7 +5,7 @@
  * Sheets:
  *   Stock     : SKU | Brand | Model | Colour | Size | UPC | Description | Photo | Link | Cost | <one column per shop code>
  *   Shops     : Code | Name | PIN (unused) | Active
- *   Users     : UserID | Name | Shop | Password | Role (Staff / Manager / Admin) | Active (Y/N) | Adjust (blank / Y = own shop / ALL)
+ *   Users     : UserID | Name | Shop | Password | Role (Staff / Manager / Admin) | Active (Y/N) | Shops (Managers: blank = own shop, list of codes, or ALL)
  *   Logins    : Time | UserID | Name | Shop | Device
  *   Requests  : ID | Requested | Shop | Type (STOCK IN / STOCK OUT / ADJUST) | SKU | Qty | Reason | Status | RequestedBy | DecidedBy | DecidedAt | Details
  *   Transfers : ID | Requested | From | To | SKU | Qty | Status | RequestedBy | Note | ApprovedBy | ApprovedAt | ReceivedBy | ReceivedAt
@@ -22,7 +22,7 @@ var SHEET_STOCK = 'Stock', SHEET_SHOPS = 'Shops', SHEET_LOG = 'Log', SHEET_USERS
  * Roles: Staff   = look up + record sales (Sold today) + confirm arrival of approved transfers.
  *        Manager = Staff + REQUEST stock in, stock out, adjustments and transfers for their shop (owner approves).
  *        Admin   = everything directly, and approves requests.
- * Users with Adjust = Y / ALL may still adjust directly without approval.
+ * Only Admins change stock counts directly. Column G lists the extra shops a Manager may work for (requests + sales).
  */
 var REQ_HEAD = ['ID', 'Requested', 'Shop', 'Type', 'SKU', 'Qty', 'Reason', 'Status', 'RequestedBy', 'DecidedBy', 'DecidedAt', 'Details'];
 var R = { ID: 0, REQ: 1, SHOP: 2, TYPE: 3, SKU: 4, QTY: 5, REASON: 6, STATUS: 7, BY: 8, DECBY: 9, DECAT: 10, DET: 11 };
@@ -155,7 +155,8 @@ function users_() {
     .map(function (r) {
       return { id: String(r[0]).trim(), name: String(r[1] || r[0]).trim(), shop: String(r[2] || '').trim(),
         pass: String(r[3]).trim(), admin: /admin/i.test(r[4]), manager: /manager/i.test(r[4]), active: String(r[5] || 'Y').toUpperCase() !== 'N',
-        adjust: /admin/i.test(r[4]) || /^ALL$/i.test(String(r[6]).trim()) ? 'ALL' : (/^(Y|YES)$/i.test(String(r[6]).trim()) ? 'SHOP' : '') };
+        adjust: /admin/i.test(r[4]) ? 'ALL' : '',            // direct adjustment: Admins only
+        shopsCol: String(r[6] || '').trim() };
     });
 }
 
@@ -189,9 +190,23 @@ function checkAdmin_(auth) {
   if (!u.admin) throw new Error('Only the owner (Admin) can do this.');
   return u;
 }
-/** The shop a request acts for: staff always act for their own shop; Admin can choose. */
+/**
+ * Shops a user may work for. Admin: all. Manager: own shop plus column G of the Users tab
+ * ("ALL", or codes separated by commas / spaces / slashes). Staff: own shop only.
+ */
+function allowedShops_(u) {
+  var all = shops_().map(function (s) { return s.code; });
+  if (u.admin) return all;
+  if (!u.manager) return all.filter(function (c) { return c === u.shop; });
+  var g = String(u.shopsCol || '').toUpperCase();
+  if (/(^|[^A-Z])ALL([^A-Z]|$)/.test(g)) return all;
+  var want = g.split(/[\s,\/;|]+/).filter(String);
+  return all.filter(function (c) { return c === u.shop || want.indexOf(c.toUpperCase()) >= 0; });
+}
+/** The shop a request acts for: the shop asked for if the user may work for it, else their own. */
 function shopFor_(u, shop) {
-  var code = (u.admin && shop) ? shop : u.shop;
+  var code = (shop && allowedShops_(u).indexOf(shop) >= 0) ? shop : u.shop;
+  if (shop && shop !== code && !u.admin) throw new Error('You are not set up to work for ' + shop + '. Ask the owner.');
   if (!shops_().some(function (s) { return s.code === code; })) throw new Error('Unknown shop "' + code + '". Check the Users tab.');
   return code;
 }
@@ -358,7 +373,7 @@ function api_logout(auth) {
   if (token) PropertiesService.getScriptProperties().deleteProperty('tok_' + hash_(token));
   return true;
 }
-function userInfo_(u) { return { id: u.id, name: u.name, shop: u.shop, role: u.admin ? 'Admin' : u.manager ? 'Manager' : 'Staff', adjust: u.adjust }; }
+function userInfo_(u) { return { id: u.id, name: u.name, shop: u.shop, role: u.admin ? 'Admin' : u.manager ? 'Manager' : 'Staff', adjust: u.adjust, shops: allowedShops_(u) }; }
 function needManager_(u, what) {
   if (!u.admin && !u.manager) throw new Error('Only a Manager or the owner can ' + what + '. Ask your manager.');
 }
@@ -464,7 +479,7 @@ function api_receiveTransfer(auth, id) {
   return withLock_(function () {
     var st = loadStock_(), t = new Date(), out = [];
     editTransfer_(id, 'IN TRANSIT', function (r) {
-      if (!u.admin && String(r[T.TO]) !== u.shop) throw new Error('Only the receiving shop can confirm this transfer.');
+      if (allowedShops_(u).indexOf(String(r[T.TO])) < 0) throw new Error('Only the receiving shop can confirm this transfer.');
       var i = st.bySku[String(r[T.SKU])];
       if (i == null) throw new Error('SKU not found: ' + r[T.SKU]);
       var q = Number(r[T.QTY]) || 0;
@@ -481,7 +496,7 @@ function api_cancelTransfer(auth, id) {
   var u = checkUser_(auth);
   return withLock_(function () {
     editTransfer_(id, 'PENDING', function (r) {
-      if (!u.admin && String(r[T.FROM]) !== u.shop) throw new Error('Only the sending shop can cancel this request.');
+      if (allowedShops_(u).indexOf(String(r[T.FROM])) < 0) throw new Error('Only the sending shop can cancel this request.');
       r[T.STATUS] = 'CANCELLED'; r[T.APPBY] = u.name; r[T.APPAT] = new Date();
     });
     return { id: id, status: 'CANCELLED' };
@@ -575,11 +590,8 @@ function api_history(auth, sku, limit) {
   return out.slice(0, limit);
 }
 
-/** Who may adjust which shop. */
-function canAdjust_(u, shop) {
-  if (u.adjust === 'ALL') return true;
-  return u.adjust === 'SHOP' && shop === u.shop;
-}
+/** Only Admins change stock counts directly; Managers request (see api_adjust). */
+function canAdjust_(u, shop) { return !!u.admin; }
 
 /**
  * Stock adjustment (stock-take, damaged, found, correction). Each line sets the counted quantity
@@ -591,11 +603,11 @@ function api_adjust(auth, shop, lines, reason) {
   reason = String(reason || '').trim();
   if (!reason) throw new Error('Give a reason for the adjustment.');
   if (!canAdjust_(u, shop)) {
-    if (u.manager && shop === u.shop) {
+    if (u.manager && allowedShops_(u).indexOf(shop) >= 0) {
       return createRequest_(u, shop, 'ADJUST', (lines || []).filter(function (l) { return l.count !== '' && l.count != null && isFinite(Number(l.count)); })
         .map(function (l) { return { sku: l.sku, model: l.model, colour: l.colour, size: l.size, upc: l.upc, qty: Math.round(Number(l.count)) }; }), reason);
     }
-    throw new Error(u.manager ? 'You can only request adjustments for ' + u.shop + '.' : u.adjust === 'SHOP' ? 'You can only adjust ' + u.shop + '.' : 'You are not authorised to adjust stock. Ask the owner.');
+    throw new Error(u.manager ? 'You can only request adjustments for ' + allowedShops_(u).join(', ') + '.' : 'You are not authorised to adjust stock. Ask the owner.');
   }
   return withLock_(function () {
     var st = loadStock_(), t = new Date(), out = [];
@@ -750,13 +762,14 @@ function api_log(auth, opts) {
   var u = checkUser_(auth);
   opts = opts || {};
   var from = opts.from ? new Date(opts.from + 'T00:00:00') : null, to = opts.to ? new Date(opts.to + 'T23:59:59') : null;
-  var shop = opts.shop || '';
-  if (!u.admin && u.adjust !== 'ALL') shop = u.shop;
+  var shop = opts.shop || '', mine = allowedShops_(u);
+  if (shop && mine.indexOf(shop) < 0) shop = u.shop;
   var q = String(opts.q || '').toUpperCase().replace(/\s+/g, ' ').trim();
   var rows = logRows_().filter(function (x) {
     if (from && x.t < from) return false;
     if (to && x.t > to) return false;
     if (shop && x.shop !== shop) return false;
+    if (!shop && mine.indexOf(x.shop) < 0) return false;
     if (opts.type && x.type.indexOf(opts.type) !== 0) return false;
     if (q && (x.sku + ' ' + x.staff + ' ' + x.ref + ' ' + x.note).toUpperCase().indexOf(q) < 0) return false;
     return true;

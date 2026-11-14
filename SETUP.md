@@ -14,13 +14,13 @@ Staff can see straight away which shop has a frame. It does not depend on any PO
 - **Users tab**: one row per person: `UserID | Name | Shop | Password | Role (Staff/Admin) | Active (Y/N)`. Set Active to `N` to block someone. Change a password by editing the cell; that person is logged out on their next refresh.
 - **Roles (Users tab, Role column)**:
   - **Staff**: look up stock, record sales (Sold today), confirm arrival of approved transfers.
-  - **Manager**: Staff + *request* stock in, stock out (non-sale removals), adjustments and transfers for their own shop. Nothing moves until the owner approves.
-  - **Admin** (owner): everything directly; approves or rejects requests (Report → Approvals, Transfer tab).
+  - **Manager**: Staff + *request* stock in, stock out (non-sale removals), adjustments and transfers for their shops (column G). Nothing moves until an Admin approves.
+  - **Admin**: everything directly; approves or rejects requests (Report → Approvals, Transfer tab). Only Admins change stock counts directly.
 - **Requests tab**: every Manager request with status (PENDING / APPROVED / REJECTED / CANCELLED), who asked and who decided.
 - **Notifications**: the owner's 🔔 shows movements by anyone else since last opened, plus requests waiting. It refreshes every minute while the app is open.
 - **Logins tab**: every login attempt, with time, user, shop, device and Result (OK / WRONG PASSWORD / LOCKED 15 MIN).
 - **Login security**: 5 wrong passwords lock that User ID for 15 minutes. A successful login gives the phone a login pass (the password is never stored on the phone). The pass lasts 30 days and stops working at once when that user's password is changed, the user is set inactive (Active = N), or they tap Log out. To log someone out of every device, change their password.
-- **Adjust column (Users tab, column G)**: who may adjust stock counts. `Y` = their own shop, `ALL` = any shop, blank = no. Admin can always adjust.
+- **Shops column (Users tab, column G)**: for Managers, the shops they work for besides their own: blank = own shop only, a list such as `CCM, 4EYE, SS`, or `ALL`. They can record sales and send requests for any of those shops (a "Working for" selector appears in the app). Ignored for Staff and Admins.
 - **Report tab (app)**: Export (stock list to Excel, any shop/brand), Adjust (set counted quantity with a reason; logged as ADJUST), Activity (all movements by shop/type/date, to Excel), Import (Admin; replaces a shop's stock from a POS export). Tap any frame for its full activity, including the opening stock loaded from the POS reports.
 - **Cost code**: type the cost in RM in the Stock tab's **Cost** column. Staff see only the letters (RODENSTICK = 1234567890, whole ringgit: 384.48 → 384 → DIE). The cost itself never reaches the app.
 - **Transfers**: a shop requests → the Admin approves or rejects in the Transfer tab (stock leaves the sending shop on approval and shows "+n coming") → the receiving shop taps **Received** (stock is added). Every step is in the **Transfers** and **Log** tabs.
