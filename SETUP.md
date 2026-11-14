@@ -79,3 +79,16 @@ All data lives in **one Google Sheet** that you own. You can open it any time to
 - **Log** tab: every sale, delivery, transfer and import, with time, shop, staff, quantity and the balance after.
 - **Other brands later**: add a prefix in `BRAND_PREFIX` (top of both files), e.g. `OO: 'Oakley'`. Reading those brands' codes from DOs needs a small change to the code pattern.
 - **Reading DOs depends on scan quality.** Flat, well-lit photos work best. Long DOs: upload each page as its own photo. Staff must always check the result before saving.
+
+## Phone notifications (free, via OneSignal)
+
+Who gets what: approvers get "Approval needed" (Admins for everything; a shop's Manager for Staff sales); the person who asked gets "Request approved / rejected"; Admins and the shop's Managers get "stock moved" when someone else sells, receives, adjusts or transfers. Nobody is notified about their own actions.
+
+One-time setup (owner):
+1. Sign up free at onesignal.com → **New App/Website** → name it `Stock Finder` → platform **Web** → **Typical Site**.
+2. Site URL `https://stock.iweargroup.com`; leave the service worker settings at their defaults (the file `OneSignalSDKWorker.js` is already on the site). Save.
+3. In OneSignal **Settings → Keys & IDs**: copy the **App ID**, and create/copy a **REST API key**.
+4. In the Sheet → Extensions → Apps Script → ⚙️ **Project Settings** → **Script properties** → add `ONESIGNAL_APP_ID` (the App ID) and `ONESIGNAL_REST_KEY` (the REST API key) → Save. Keep the REST key secret: never paste it in chat or in the code.
+5. Deploy the latest Code.gs as a new version.
+
+Each person, once per phone: **iPhone (iOS 16.4+)**: Safari → Share → Add to Home Screen → open from the icon → More → Turn on notifications → Allow. **Android**: open in Chrome → More → Turn on notifications → Allow.

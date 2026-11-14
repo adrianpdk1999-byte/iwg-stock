@@ -69,6 +69,7 @@ function doPost(e) {
     if (!fn) throw new Error('Unknown action ' + req.fn + '. The server code may be out of date.');
     out = { ok: true, result: fn.apply(null, req.args || []) };
   } catch (err) { out = { ok: false, error: String(err && err.message || err) }; }
+  if (out.ok) flushPush_(); else PUSHQ_ = [];   // notifications only for actions that succeeded
   return json_(out);
 }
 
@@ -184,6 +185,7 @@ function checkUser_(auth) {
   if (Date.now() > rec.exp) { props.deleteProperty(key); throw bad; }
   var u = users_().filter(function (x) { return x.id.toLowerCase() === String(rec.uid).toLowerCase(); })[0];
   if (!u || !u.active || hash_(u.pass) !== rec.ph) { props.deleteProperty(key); throw bad; }
+  ACTOR_ = u;
   return u;
 }
 function checkAdmin_(auth) {
@@ -279,6 +281,7 @@ function log_(entries) {
   if (!entries.length) return;
   var sh = sheet_(SHEET_LOG);
   sh.getRange(sh.getLastRow() + 1, 1, entries.length, LOG_HEAD.length).setValues(entries);
+  queueMoves_(entries);
 }
 
 function cleanLines_(lines) {
@@ -290,6 +293,66 @@ function cleanLines_(lines) {
 
 function fmt_(d) {
   return d instanceof Date && !isNaN(d) ? Utilities.formatDate(d, Session.getScriptTimeZone(), 'd MMM yyyy HH:mm') : String(d || '');
+}
+
+/* ---------------- phone notifications (OneSignal) ----------------
+ * Switched on by two Script Properties (Apps Script → Project Settings → Script properties):
+ *   ONESIGNAL_APP_ID   – the OneSignal App ID (not secret)
+ *   ONESIGNAL_REST_KEY – the OneSignal REST API key (secret: never put it in the code or chat)
+ * Each user's phone is linked under a private push ID derived from their User ID, so nobody can
+ * sign a phone up for another person's notifications by guessing a User ID.
+ */
+var ACTOR_ = null, PUSHQ_ = [];
+var MOVE_WORDS = { SOLD: 'sold', RECEIVE: 'stock in', 'STOCK OUT': 'stock out', ADJUST: 'adjusted', IMPORT: 'imported',
+  'TRANSFER OUT': 'sent out', 'TRANSFER IN': 'received' };
+
+function pushId_(uid) {
+  var props = PropertiesService.getScriptProperties(), salt = props.getProperty('PUSH_SALT');
+  if (!salt) { salt = Utilities.getUuid(); props.setProperty('PUSH_SALT', salt); }
+  return 'u' + hash_(salt + ':' + String(uid).toLowerCase()).replace(/[^A-Za-z0-9]/g, '').slice(0, 32);
+}
+/** Admins plus the Managers who work for this shop. */
+function watchers_(shop) {
+  return users_().filter(function (x) { return x.active && (x.admin || (x.manager && allowedShops_(x).indexOf(shop) >= 0)); });
+}
+function queuePush_(users, title, body) {
+  var me = ACTOR_ ? ACTOR_.id.toLowerCase() : '';
+  var ids = (users || []).filter(function (x) { return x && x.id.toLowerCase() !== me; }).map(function (x) { return x.id; });
+  if (ids.length) PUSHQ_.push({ ids: ids, title: title, body: body });
+}
+/** One message per shop per action, e.g. "Anywear · Alex sold 2 frames: RB2140F 901S 52 …" */
+function queueMoves_(entries) {
+  var by = {};
+  entries.forEach(function (e) {
+    var g = by[e[1]] || (by[e[1]] = { n: 0, types: {}, skus: [], who: {} });
+    g.n += Math.abs(Number(e[4]) || 0); g.types[e[2]] = 1; g.who[e[7]] = 1;
+    if (g.skus.indexOf(e[3]) < 0) g.skus.push(e[3]);
+  });
+  var names = {}; shops_().forEach(function (s) { names[s.code] = s.name; });
+  Object.keys(by).forEach(function (shop) {
+    var g = by[shop], what = Object.keys(g.types).map(function (t) { return MOVE_WORDS[t] || t.toLowerCase(); }).join(' / ');
+    var who = Object.keys(g.who).join(', ');
+    var body = who + ' ' + what + ' ' + g.n + ' frame' + (g.n === 1 ? '' : 's') + ': ' + g.skus.slice(0, 3).join(', ') + (g.skus.length > 3 ? ' …' : '');
+    queuePush_(watchers_(shop), names[shop] || shop, body);
+  });
+}
+function flushPush_() {
+  var q = PUSHQ_; PUSHQ_ = [];
+  if (!q.length) return;
+  var props = PropertiesService.getScriptProperties();
+  var app = props.getProperty('ONESIGNAL_APP_ID'), key = props.getProperty('ONESIGNAL_REST_KEY');
+  if (!app || !key) return;                    // not set up yet: the in-app bell still works
+  q.forEach(function (m) {
+    try {
+      UrlFetchApp.fetch('https://api.onesignal.com/notifications', {
+        method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+        headers: { Authorization: 'Key ' + key },
+        payload: JSON.stringify({ app_id: app, target_channel: 'push',
+          include_aliases: { external_id: m.ids.map(pushId_) },
+          headings: { en: m.title }, contents: { en: m.body }, url: 'https://stock.iweargroup.com/' })
+      });
+    } catch (e) { /* a failed notification never blocks stock work */ }
+  });
 }
 
 /* ---------------- read ---------------- */
@@ -374,7 +437,7 @@ function api_logout(auth) {
   if (token) PropertiesService.getScriptProperties().deleteProperty('tok_' + hash_(token));
   return true;
 }
-function userInfo_(u) { return { id: u.id, name: u.name, shop: u.shop, role: u.admin ? 'Admin' : u.manager ? 'Manager' : 'Staff', adjust: u.adjust, shops: allowedShops_(u) }; }
+function userInfo_(u) { return { id: u.id, name: u.name, shop: u.shop, role: u.admin ? 'Admin' : u.manager ? 'Manager' : 'Staff', adjust: u.adjust, shops: allowedShops_(u), pushId: pushId_(u.id) }; }
 function needManager_(u, what) {
   if (!u.admin && !u.manager) throw new Error('Only a Manager or the owner can ' + what + '. Ask your manager.');
 }
@@ -383,6 +446,7 @@ function api_getData(auth) {
   var u = checkUser_(auth);
   var d = getData_();
   d.user = userInfo_(u);
+  d.pushApp = PropertiesService.getScriptProperties().getProperty('ONESIGNAL_APP_ID') || '';
   return d;
 }
 
@@ -439,6 +503,8 @@ function api_requestTransfer(auth, toShop, lines, note, shop) {
     if (!rows.length) throw new Error('Add at least one frame.');
     var sh = sheetOrCreate_(SHEET_TRANSFERS, TR_HEAD);
     sh.getRange(sh.getLastRow() + 1, 1, rows.length, TR_HEAD.length).setValues(rows);
+    queuePush_(users_().filter(function (x) { return x.active && x.admin; }), 'Approval needed · transfer',
+      u.name + ': ' + from + ' → ' + toShop + ', ' + rows.length + ' line' + (rows.length === 1 ? '' : 's') + ' (' + id + ')');
     return { id: id, lines: rows.length };
   });
 }
@@ -456,6 +522,9 @@ function editTransfer_(id, status, fn) {
 /** Step 2 (owner): approve -> frames leave the sending shop and are in transit; or reject. */
 function api_decideTransfer(auth, id, approve) {
   var u = checkAdmin_(auth);
+  var tr = transfers_().filter(function (x) { return x.id === id && x.status === 'PENDING'; })[0];
+  if (tr) queuePush_(users_().filter(function (x) { return x.name === tr.by; }), 'Transfer ' + (approve ? 'approved' : 'rejected'),
+    id + ' ' + tr.from + ' → ' + tr.to + ' ' + (approve ? 'approved' : 'rejected') + ' by ' + u.name);
   return withLock_(function () {
     var t = new Date();
     if (!approve) {
@@ -669,6 +738,9 @@ function createRequest_(u, shop, type, lines, reason) {
     if (!rows.length) throw new Error('Add at least one frame.');
     var sh = sheetOrCreate_(SHEET_REQ, REQ_HEAD);
     sh.getRange(sh.getLastRow() + 1, 1, rows.length, REQ_HEAD.length).setValues(rows);
+    var what = { SOLD: 'Sale', 'STOCK IN': 'Stock in', 'STOCK OUT': 'Stock out', ADJUST: 'Adjustment' }[type] || type;
+    queuePush_(users_().filter(function (x) { return x.active && canDecide_(x, type, shop); }), 'Approval needed · ' + shop,
+      what + ' by ' + u.name + ': ' + rows.length + ' line' + (rows.length === 1 ? '' : 's') + ' (' + id + ')');
     return { id: id, lines: rows.length, pending: true };
   });
 }
@@ -700,9 +772,12 @@ function canDecide_(u, type, shop) {
 }
 function api_decideRequest(auth, id, approve) {
   var u = checkUser_(auth);
-  requests_().filter(function (r) { return r.id === id && r.status === 'PENDING'; }).forEach(function (r) {
+  var mine = requests_().filter(function (r) { return r.id === id && r.status === 'PENDING'; });
+  mine.forEach(function (r) {
     if (!canDecide_(u, r.type, r.shop)) throw new Error(u.manager ? 'Only an Admin can approve this request.' : 'Only the owner (Admin) can do this.');
   });
+  if (mine.length) queuePush_(users_().filter(function (x) { return x.id === mine[0].uid; }), 'Request ' + (approve ? 'approved' : 'rejected'),
+    id + ' (' + mine[0].type.toLowerCase() + ', ' + mine[0].shop + ') ' + (approve ? 'approved' : 'rejected') + ' by ' + u.name);
   return withLock_(function () {
     var t = new Date();
     if (!approve) {

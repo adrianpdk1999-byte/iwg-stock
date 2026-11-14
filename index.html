@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Stock Finder</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Stock Finder">
+<meta name="theme-color" content="#c8102e">
 <style>
 :root{
   --bg:#f5f5f2;--card:#fff;--ink:#1b1b1a;--muted:#6b6b66;--line:#e2e1dc;
@@ -139,7 +144,7 @@ b.neg{color:var(--bad)}
 
 <script>
 /* Watchdog: a separate script, so it still runs if the main script fails. Shows the error on screen. */
-window.SF_VERSION = '2026-11-16b';
+window.SF_VERSION = '2026-11-16c';
 window.SF_ERRORS = [];
 window.addEventListener('error', function (e) {
   window.SF_ERRORS.push((e.message || 'Error') + (e.lineno ? ' (line ' + e.lineno + ')' : ''));
@@ -543,6 +548,7 @@ function moreView(){
       • A USB/Bluetooth barcode scanner types the UPC into the box. Press Enter to add it.<br>
       • Tap an item for its photo, its full activity, and to add a photo.<br>
       • Import, export, stock adjustments and activity reports are in the Report tab.</div>
+    <h2>Phone notifications</h2><div class="card">${pushBox()}</div>
     <p class="muted" style="text-align:center">Page version ${esc(window.SF_VERSION||'')}</p>`;
 }
 
@@ -860,7 +866,13 @@ document.addEventListener('click', async e => {
     } catch(err){ S.auth = null; S.data = null; S.msg.login = {t:'err', s:err.message}; }
     store.set('sf_auth2', S.auth); S.busy = false; render(); return;
   }
-  if (a==='logout'){ if (S.auth) call('api_logout', S.auth).catch(() => {}); S.notif = null; S.auth = null; S.data = null; S.imp = null; store.set('sf_auth2', null); store.set('sf_shop', ''); render(); return; }
+  if (a==='pushOn'){
+    S.busy = true; S.msg.push = null; render();
+    try { await linkPush(true); S.msg.push = pushPerm()==='granted' ? {t:'ok', s:'Done. This phone will get notifications.'} : {t:'warn', s:'Permission was not given. Tap again and choose Allow.'}; }
+    catch(err){ S.msg.push = {t:'err', s:'Could not turn on notifications: ' + (err && err.message || err)}; }
+    S.busy = false; render(); return;
+  }
+  if (a==='logout'){ unlinkPush(); if (S.auth) call('api_logout', S.auth).catch(() => {}); S.notif = null; S.auth = null; S.data = null; S.imp = null; store.set('sf_auth2', null); store.set('sf_shop', ''); render(); return; }
   if (['approve','reject','received','cancelX'].includes(a)){
     const id = t.dataset.id;
     const ask = {approve:'Approve transfer ' + id + '? The frames come off the sending shop now.', reject:'Reject transfer ' + id + '?',
@@ -1025,6 +1037,41 @@ function showSugg(inp){
   box.hidden = false;
 }
 
+/* ---------- phone notifications (OneSignal) ---------- */
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+const pushPerm = () => ('Notification' in window) ? Notification.permission : 'unsupported';
+function pushBox(){
+  if (!S.data || !S.data.pushApp) return `<p class="muted" style="margin:0">Not set up yet. The owner turns this on once (see the setup guide). The 🔔 in the app works meanwhile.</p>`;
+  if (isIOS() && !isStandalone()) return `<p style="margin:0"><b>On iPhone/iPad:</b> tap <b>Share</b> → <b>Add to Home Screen</b>, open Stock Finder from the new icon, then come back here and tap Turn on.</p>`;
+  const p = pushPerm();
+  if (p==='unsupported') return `<p class="muted" style="margin:0">This browser can't show notifications. Use Chrome on Android, or Safari on iPhone (iOS 16.4 or newer) from the home-screen icon.</p>`;
+  if (p==='denied') return `<p style="margin:0">Notifications are <b>blocked</b> for this site. Allow them in the phone's Settings → Notifications (or the browser's site settings), then reopen the app.</p>`;
+  return `${S.pushOn && p==='granted' ? '<p class="msg ok" style="margin:0 0 8px">Notifications are on for this phone.</p>' : `<p class="muted" style="margin:0 0 8px">${isAdmin() || isMgr() ? 'Get a notification for approvals waiting and stock moved by others at your shops.' : 'Get a notification when your sales are approved or rejected.'}</p>`}
+    <button class="btn ${S.pushOn && p==='granted' ? 'alt' : ''} wide" data-act="pushOn" ${S.busy?'disabled':''}>${S.pushOn && p==='granted' ? 'Re-link this phone' : 'Turn on notifications'}</button>${msg('push')}`;
+}
+let osReady = null;
+function oneSignal(){
+  if (osReady) return osReady;
+  osReady = new Promise((ok, no) => {
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    window.OneSignalDeferred.push(async OS => {
+      try { await OS.init({appId: S.data.pushApp, serviceWorkerPath: 'OneSignalSDKWorker.js', allowLocalhostAsSecureOrigin: true}); ok(OS); } catch(e){ no(e); }
+    });
+    loadScript('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js').catch(no);
+  });
+  return osReady;
+}
+/** Link this phone to the logged-in user (private push ID from the server) and ask permission if needed. */
+async function linkPush(ask){
+  if (!S.data || !S.data.pushApp || !S.auth || !S.auth.pushId) return;
+  const OS = await oneSignal();
+  await OS.login(S.auth.pushId);
+  if (ask && pushPerm()!=='granted') await OS.Notifications.requestPermission();
+  S.pushOn = pushPerm()==='granted';
+}
+async function unlinkPush(){ try { if (osReady){ const OS = await osReady; await OS.logout(); } } catch(e){} }
+
 /* ---------- owner notifications ---------- */
 async function refreshNotif(){
   if (!isAdmin() && !isMgr()) return;
@@ -1056,6 +1103,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
     return;
   }
   render(); refreshNotif();
+  if (pushPerm()==='granted') linkPush(false).then(() => render()).catch(() => {});
 })();
 </script>
 </body>
