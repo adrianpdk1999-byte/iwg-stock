@@ -18,7 +18,8 @@ Staff can see straight away which shop has a frame. It does not depend on any PO
   - **Admin** (owner): everything directly; approves or rejects requests (Report → Approvals, Transfer tab).
 - **Requests tab**: every Manager request with status (PENDING / APPROVED / REJECTED / CANCELLED), who asked and who decided.
 - **Notifications**: the owner's 🔔 shows movements by anyone else since last opened, plus requests waiting. It refreshes every minute while the app is open.
-- **Logins tab**: every login, with time, user, shop and device.
+- **Logins tab**: every login attempt, with time, user, shop, device and Result (OK / WRONG PASSWORD / LOCKED 15 MIN).
+- **Login security**: 5 wrong passwords lock that User ID for 15 minutes. A successful login gives the phone a login pass (the password is never stored on the phone). The pass lasts 30 days and stops working at once when that user's password is changed, the user is set inactive (Active = N), or they tap Log out. To log someone out of every device, change their password.
 - **Adjust column (Users tab, column G)**: who may adjust stock counts. `Y` = their own shop, `ALL` = any shop, blank = no. Admin can always adjust.
 - **Report tab (app)**: Export (stock list to Excel, any shop/brand), Adjust (set counted quantity with a reason; logged as ADJUST), Activity (all movements by shop/type/date, to Excel), Import (Admin; replaces a shop's stock from a POS export). Tap any frame for its full activity, including the opening stock loaded from the POS reports.
 - **Cost code**: type the cost in RM in the Stock tab's **Cost** column. Staff see only the letters (RODENSTICK = 1234567890, whole ringgit: 384.48 → 384 → DIE). The cost itself never reaches the app.

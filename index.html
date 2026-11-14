@@ -135,7 +135,7 @@ b.neg{color:var(--bad)}
 
 <script>
 /* Watchdog: a separate script, so it still runs if the main script fails. Shows the error on screen. */
-window.SF_VERSION = '2026-11-14b';
+window.SF_VERSION = '2026-11-15a';
 window.SF_ERRORS = [];
 window.addEventListener('error', function (e) {
   window.SF_ERRORS.push((e.message || 'Error') + (e.lineno ? ' (line ' + e.lineno + ')' : ''));
@@ -228,7 +228,11 @@ async function call(fn, ...args){
   } finally { clearTimeout(t); }
   let j;
   try { j = await r.json(); } catch(e){ throw new Error('Unexpected reply from the server (' + r.status + ').'); }
-  if (!j.ok) throw new Error(j.error || 'Server error');
+  if (!j.ok){
+    // expired / revoked login pass: back to the login screen (not for the login call itself)
+    if (fn !== 'api_login' && /log in again/i.test(j.error||'') && S.auth){ S.auth = null; S.data = null; S.notif = null; store.set('sf_auth2', null); S.msg = {login:{t:'err', s:j.error}}; setTimeout(render, 0); }
+    throw new Error(j.error || 'Server error');
+  }
   return j.result;
 }
 const S = {
@@ -819,12 +823,13 @@ document.addEventListener('click', async e => {
     S.busy = true; S.msg.login = null; render();
     try {
       const r = await call('api_login', user, pass, navigator.userAgent);
-      S.auth = Object.assign({user, pass}, r); S.shop = r.shop; S.tab = 'find';
+      // New server: keep the login pass only, never the password. (Old server without passes: legacy fallback until Code.gs is updated.)
+      S.auth = r.token ? r : Object.assign({user, pass}, r); S.shop = r.shop; S.tab = 'find';
       await loadData(); refreshNotif();
     } catch(err){ S.auth = null; S.data = null; S.msg.login = {t:'err', s:err.message}; }
     store.set('sf_auth2', S.auth); S.busy = false; render(); return;
   }
-  if (a==='logout'){ S.notif = null; S.auth = null; S.data = null; S.imp = null; store.set('sf_auth2', null); store.set('sf_shop', ''); render(); return; }
+  if (a==='logout'){ if (S.auth) call('api_logout', S.auth).catch(() => {}); S.notif = null; S.auth = null; S.data = null; S.imp = null; store.set('sf_auth2', null); store.set('sf_shop', ''); render(); return; }
   if (['approve','reject','received','cancelX'].includes(a)){
     const id = t.dataset.id;
     const ask = {approve:'Approve transfer ' + id + '? The frames come off the sending shop now.', reject:'Reject transfer ' + id + '?',
@@ -840,7 +845,7 @@ document.addEventListener('click', async e => {
     } catch(err){ S.msg.xferAct = {t:'err', s:err.message}; }
     S.busy = false; render(); window.scrollTo(0, 0); return;
   }
-  if (a==='refresh'){ t.disabled = true; await loadData(); render(); return; }
+  if (a==='refresh'){ t.disabled = true; try { await loadData(); } catch(err){ if (S.auth) S.msg.find = {t:'err', s:err.message}; } render(); return; }
   if (a==='inc'){ S.lines[k][i].qty = (+S.lines[k][i].qty||0) + 1; saveLines(k); render(); return; }
   if (a==='dec'){ S.lines[k][i].qty = Math.max(1, (+S.lines[k][i].qty||1) - 1); saveLines(k); render(); return; }
   if (a==='del'){ S.lines[k].splice(i, 1); saveLines(k); render(); return; }
@@ -1010,7 +1015,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
   if (!S.auth){ render(); return; }
   try { await loadData(); }
   catch(e){
-    if (/password|log in/i.test(e.message)){ S.auth = null; store.set('sf_auth2', null); S.msg.login = {t:'err', s:e.message}; render(); return; }
+    if (/password|log in|expired/i.test(e.message)){ S.auth = null; store.set('sf_auth2', null); S.msg.login = {t:'err', s:e.message}; render(); return; }
     $('#app').innerHTML = `<div class="msg err">Could not load stock: ${esc(e.message)}</div>
       <p><button class="btn" onclick="location.reload()">Try again</button></p>`;
     return;

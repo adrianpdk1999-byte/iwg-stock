@@ -30,7 +30,8 @@ var FIXED = ['SKU', 'Brand', 'Model', 'Colour', 'Size', 'UPC', 'Description', 'P
 var C = { SKU: 0, BRAND: 1, MODEL: 2, COLOUR: 3, SIZE: 4, UPC: 5, DESC: 6, PHOTO: 7, LINK: 8, COST: 9 };
 var LOG_HEAD = ['Time', 'Shop', 'Type', 'SKU', 'Qty', 'Balance', 'Ref', 'Staff', 'Note'];
 var USER_HEAD = ['UserID', 'Name', 'Shop', 'Password', 'Role', 'Active', 'Adjust'];
-var LOGIN_HEAD = ['Time', 'UserID', 'Name', 'Shop', 'Device'];
+var LOGIN_HEAD = ['Time', 'UserID', 'Name', 'Shop', 'Device', 'Result'];
+var MAX_TRIES = 5, LOCK_MINUTES = 15, PASS_DAYS = 30;
 var TR_HEAD = ['ID', 'Requested', 'From', 'To', 'SKU', 'Qty', 'Status', 'RequestedBy', 'Note', 'ApprovedBy', 'ApprovedAt', 'ReceivedBy', 'ReceivedAt'];
 var T = { ID: 0, REQ: 1, FROM: 2, TO: 3, SKU: 4, QTY: 5, STATUS: 6, BY: 7, NOTE: 8, APPBY: 9, APPAT: 10, RCVBY: 11, RCVAT: 12 };
 var COST_LETTERS = 'RODENSTICK'; // R=1 O=2 D=3 E=4 N=5 S=6 T=7 I=8 C=9 K=0
@@ -41,13 +42,6 @@ var SCAN_FOLDER = 'Stock Finder - DO scans', PHOTO_FOLDER = 'Stock Finder - phot
 /* ---------------- web app ---------------- */
 
 function doGet(e) {
-  // Test link: add ?test=1 to the web app URL to check the Sheet can be read.
-  if (e && e.parameter && e.parameter.test) {
-    var out;
-    try { var d = getData_(); out = { ok: true, shops: d.shops, items: d.items.length, users: users_().length, at: d.at }; }
-    catch (err) { out = { ok: false, error: String(err && err.message || err) }; }
-    return json_(out);
-  }
   // Plain file + text replace (no template engine, so the page's JavaScript is served untouched).
   var html = HtmlService.createHtmlOutputFromFile('Index').getContent()
     .split('__API_URL__').join(ScriptApp.getService().getUrl());
@@ -58,7 +52,7 @@ function doGet(e) {
 }
 
 var API = {
-  api_login: api_login, api_getData: api_getData, api_recordSales: api_recordSales, api_receive: api_receive,
+  api_login: api_login, api_logout: api_logout, api_getData: api_getData, api_recordSales: api_recordSales, api_receive: api_receive,
   api_requestTransfer: api_requestTransfer, api_decideTransfer: api_decideTransfer,
   api_receiveTransfer: api_receiveTransfer, api_cancelTransfer: api_cancelTransfer,
   api_importShop: api_importShop, api_ocr: api_ocr, api_setPhoto: api_setPhoto, api_history: api_history,
@@ -165,13 +159,29 @@ function users_() {
     });
 }
 
-/** Checks the user ID + password sent with every request. */
+/* ---------------- login security ----------------
+ * Password is checked ONLY at login, with a lockout after MAX_TRIES wrong attempts.
+ * A successful login returns a random login pass; the phone keeps the pass, never the password.
+ * The pass expires after PASS_DAYS, on Log out, or at once when the user's password is changed
+ * or the user is set inactive. Only a hash of each pass is stored on the server.
+ */
+function hash_(s) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(s)));
+}
+function failKey_(id) { return 'fail_' + hash_(String(id).toLowerCase()).slice(0, 24); }
+
+/** Checks the login pass sent with every request. */
 function checkUser_(auth) {
-  var id = String(auth && auth.user || '').trim().toLowerCase();
-  var u = users_().filter(function (x) { return x.id.toLowerCase() === id; })[0];
-  if (!u || !u.active || !u.pass || u.pass !== String(auth.pass || '').trim()) {
-    throw new Error('Wrong user ID or password. Please log in again.');
-  }
+  var token = String(auth && auth.token || '');
+  var bad = new Error('Your login has expired. Please log in again.');
+  if (token.length < 30) throw bad;
+  var props = PropertiesService.getScriptProperties(), key = 'tok_' + hash_(token);
+  var rec = props.getProperty(key);
+  if (!rec) throw bad;
+  rec = JSON.parse(rec);
+  if (Date.now() > rec.exp) { props.deleteProperty(key); throw bad; }
+  var u = users_().filter(function (x) { return x.id.toLowerCase() === String(rec.uid).toLowerCase(); })[0];
+  if (!u || !u.active || hash_(u.pass) !== rec.ph) { props.deleteProperty(key); throw bad; }
   return u;
 }
 function checkAdmin_(auth) {
@@ -307,9 +317,46 @@ function transfers_() {
 /* ---------------- API (called from the page) ---------------- */
 
 function api_login(id, pass, device) {
-  var u = checkUser_({ user: id, pass: pass });
-  sheetOrCreate_(SHEET_LOGINS, LOGIN_HEAD).appendRow([new Date(), u.id, u.name, u.shop, String(device || '').slice(0, 200)]);
-  return userInfo_(u);
+  id = String(id || '').trim(); pass = String(pass || '').trim(); device = String(device || '').slice(0, 200);
+  var cache = CacheService.getScriptCache(), fk = failKey_(id);
+  var f = JSON.parse(cache.get(fk) || '{"n":0,"until":0}');
+  var logins = sheetOrCreate_(SHEET_LOGINS, LOGIN_HEAD);
+  if (f.until > Date.now()) {
+    var mins = Math.ceil((f.until - Date.now()) / 60000);
+    throw new Error('Too many wrong tries. This login is locked for ' + mins + ' more minute' + (mins === 1 ? '' : 's') + '.');
+  }
+  var u = users_().filter(function (x) { return x.id.toLowerCase() === id.toLowerCase(); })[0];
+  if (!u || !u.active || !u.pass || u.pass !== pass) {
+    f.n += 1;
+    var locked = f.n >= MAX_TRIES;
+    if (locked) { f.until = Date.now() + LOCK_MINUTES * 60000; f.n = 0; }
+    cache.put(fk, JSON.stringify(f), LOCK_MINUTES * 60 + 60);
+    logins.appendRow([new Date(), id.slice(0, 40), u ? u.name : '(unknown ID)', u ? u.shop : '', device, locked ? 'LOCKED ' + LOCK_MINUTES + ' MIN' : 'WRONG PASSWORD']);
+    if (locked) throw new Error('Too many wrong tries. This login is locked for ' + LOCK_MINUTES + ' minutes.');
+    var left = MAX_TRIES - f.n;
+    throw new Error('Wrong user ID or password.' + (left <= 2 ? ' ' + left + ' tr' + (left === 1 ? 'y' : 'ies') + ' left before a ' + LOCK_MINUTES + '-minute lock.' : ''));
+  }
+  cache.remove(fk);
+  var props = PropertiesService.getScriptProperties();
+  // tidy expired passes
+  var all = props.getProperties(), now = Date.now();
+  Object.keys(all).forEach(function (k) {
+    if (k.indexOf('tok_') !== 0) return;
+    try { if (JSON.parse(all[k]).exp < now) props.deleteProperty(k); } catch (e) { props.deleteProperty(k); }
+  });
+  var token = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+  props.setProperty('tok_' + hash_(token), JSON.stringify({ uid: u.id, exp: now + PASS_DAYS * 86400000, ph: hash_(u.pass) }));
+  logins.appendRow([new Date(), u.id, u.name, u.shop, device, 'OK']);
+  var info = userInfo_(u);
+  info.token = token;
+  return info;
+}
+
+/** Ends this login pass (Log out). */
+function api_logout(auth) {
+  var token = String(auth && auth.token || '');
+  if (token) PropertiesService.getScriptProperties().deleteProperty('tok_' + hash_(token));
+  return true;
 }
 function userInfo_(u) { return { id: u.id, name: u.name, shop: u.shop, role: u.admin ? 'Admin' : u.manager ? 'Manager' : 'Staff', adjust: u.adjust }; }
 function needManager_(u, what) {
