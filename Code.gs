@@ -58,7 +58,8 @@ var API = {
   api_receiveTransfer: api_receiveTransfer, api_cancelTransfer: api_cancelTransfer,
   api_importShop: api_importShop, api_ocr: api_ocr, api_setPhoto: api_setPhoto, api_history: api_history,
   api_adjust: api_adjust, api_log: api_log, api_stockOut: api_stockOut, api_decideRequest: api_decideRequest,
-  api_cancelRequest: api_cancelRequest, api_notifications: api_notifications, api_markSeen: api_markSeen
+  api_cancelRequest: api_cancelRequest, api_notifications: api_notifications, api_markSeen: api_markSeen,
+  api_tgStatus: api_tgStatus, api_tgLink: api_tgLink, api_tgCheck: api_tgCheck, api_tgUnlink: api_tgUnlink
 };
 
 function doPost(e) {
@@ -340,6 +341,7 @@ function flushPush_() {
   var q = PUSHQ_; PUSHQ_ = [];
   if (!q.length) return;
   var props = PropertiesService.getScriptProperties();
+  sendTelegram_(q, props);
   var app = props.getProperty('ONESIGNAL_APP_ID'), key = props.getProperty('ONESIGNAL_REST_KEY');
   if (!app || !key) return;                    // not set up yet: the in-app bell still works
   q.forEach(function (m) {
@@ -353,6 +355,74 @@ function flushPush_() {
       });
     } catch (e) { /* a failed notification never blocks stock work */ }
   });
+}
+
+/* ---------------- Telegram notifications ----------------
+ * Switched on by Script Property TELEGRAM_BOT_TOKEN (from @BotFather; secret: never put it in code or chat).
+ * Each user links their own Telegram from the app: a one-time code (15 minutes) is sent to the bot
+ * with /start; the server reads it with getUpdates (no webhook needed) and stores the chat ID.
+ */
+function tgToken_() { return PropertiesService.getScriptProperties().getProperty('TELEGRAM_BOT_TOKEN') || ''; }
+function tgCall_(method, payload) {
+  var tok = tgToken_();
+  if (!tok) throw new Error('Telegram is not set up yet. The owner adds the bot token first.');
+  var r = UrlFetchApp.fetch('https://api.telegram.org/bot' + tok + '/' + method, {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true, payload: JSON.stringify(payload || {}) });
+  var j = JSON.parse(r.getContentText() || '{}');
+  if (!j.ok) throw new Error('Telegram: ' + (j.description || 'request failed'));
+  return j.result;
+}
+function sendTelegram_(q, props) {
+  if (!tgToken_()) return;
+  q.forEach(function (m) {
+    m.ids.forEach(function (uid) {
+      var chat = props.getProperty('tg_' + String(uid).toLowerCase());
+      if (!chat) return;
+      try { tgCall_('sendMessage', { chat_id: chat, text: m.title + '\n' + m.body + '\nhttps://stock.iweargroup.com/', disable_web_page_preview: true }); }
+      catch (e) { /* a failed notification never blocks stock work */ }
+    });
+  });
+}
+function api_tgStatus(auth) {
+  var u = checkUser_(auth), props = PropertiesService.getScriptProperties();
+  if (!tgToken_()) return { configured: false };
+  var bot = props.getProperty('TG_BOT_NAME');
+  if (!bot) { try { bot = tgCall_('getMe').username; props.setProperty('TG_BOT_NAME', bot); } catch (e) { return { configured: false, error: e.message }; } }
+  return { configured: true, bot: bot, linked: !!props.getProperty('tg_' + u.id.toLowerCase()) };
+}
+/** Step 1: a one-time link the user opens in Telegram (t.me/<bot>?start=<code>). */
+function api_tgLink(auth) {
+  var u = checkUser_(auth), st = api_tgStatus(auth);
+  if (!st.configured) throw new Error('Telegram is not set up yet. The owner adds the bot token first.');
+  var code = Utilities.getUuid().replace(/-/g, '').slice(0, 16);
+  CacheService.getScriptCache().put('tgc_' + code, u.id, 900);
+  return { url: 'https://t.me/' + st.bot + '?start=' + code, bot: st.bot };
+}
+/** Step 2: after pressing Start in Telegram, read the bot's new messages and link matching codes. */
+function api_tgCheck(auth) {
+  var u = checkUser_(auth), props = PropertiesService.getScriptProperties(), cache = CacheService.getScriptCache();
+  return withLock_(function () {
+    var off = Number(props.getProperty('TG_OFFSET') || 0);
+    var ups = tgCall_('getUpdates', { offset: off, timeout: 0, allowed_updates: ['message'] }) || [];
+    ups.forEach(function (up) {
+      off = Math.max(off, up.update_id + 1);
+      var msg = up.message || {}, m = String(msg.text || '').match(/^\/start\s+([0-9a-f]{16})$/);
+      if (!m || !msg.chat) return;
+      var uid = cache.get('tgc_' + m[1]);
+      if (!uid) { try { tgCall_('sendMessage', { chat_id: msg.chat.id, text: 'This link has expired. Open Stock Finder → More → Connect Telegram again.' }); } catch (e) {} return; }
+      cache.remove('tgc_' + m[1]);
+      props.setProperty('tg_' + uid.toLowerCase(), String(msg.chat.id));
+      var who = users_().filter(function (x) { return x.id === uid; })[0];
+      try { tgCall_('sendMessage', { chat_id: msg.chat.id, text: 'Connected to Stock Finder as ' + (who ? who.name : uid) + '. You will get approvals and stock alerts here.' }); } catch (e) {}
+    });
+    props.setProperty('TG_OFFSET', String(off));
+    return { linked: !!props.getProperty('tg_' + u.id.toLowerCase()) };
+  });
+}
+function api_tgUnlink(auth) {
+  var u = checkUser_(auth);
+  PropertiesService.getScriptProperties().deleteProperty('tg_' + u.id.toLowerCase());
+  return { linked: false };
 }
 
 /* ---------------- read ---------------- */

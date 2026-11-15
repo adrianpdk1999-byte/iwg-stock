@@ -80,6 +80,19 @@ All data lives in **one Google Sheet** that you own. You can open it any time to
 - **Other brands later**: add a prefix in `BRAND_PREFIX` (top of both files), e.g. `OO: 'Oakley'`. Reading those brands' codes from DOs needs a small change to the code pattern.
 - **Reading DOs depends on scan quality.** Flat, well-lit photos work best. Long DOs: upload each page as its own photo. Staff must always check the result before saving.
 
+## Telegram notifications (free)
+
+Telegram messages for approvals waiting, requests approved or rejected, and stock moved by others. Your own actions never notify you.
+
+**Owner, once:**
+1. In Telegram, open **@BotFather** → send `/newbot` → give a name (e.g. *IWG Stock Finder*) and a username ending in `bot`. Copy the **token** it gives you.
+2. Apps Script → ⚙️ Project Settings → Script properties → **Add script property**: `TELEGRAM_BOT_TOKEN` = the token. Keep it secret. Never paste it into chats or the code.
+3. Deploy the latest Code.gs as a new version.
+
+**Each person, once:** Stock Finder → **More** → **1. Connect Telegram** → Telegram opens → tap **START** → back in Stock Finder tap **2. I pressed Start**. The link works for 15 minutes and only once.
+
+To stop: More → Turn off Telegram notifications. To cut someone off, remove the `tg_<userid>` script property.
+
 ## Phone notifications (free, via OneSignal)
 
 Who gets what: approvers get "Approval needed" (Admins for everything; a shop's Manager for Staff sales); the person who asked gets "Request approved / rejected"; Admins and the shop's Managers get "stock moved" when someone else sells, receives, adjusts or transfers. Nobody is notified about their own actions.
