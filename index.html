@@ -144,7 +144,7 @@ b.neg{color:var(--bad)}
 
 <script>
 /* Watchdog: a separate script, so it still runs if the main script fails. Shows the error on screen. */
-window.SF_VERSION = '2026-11-17b';
+window.SF_VERSION = '2026-11-17c';
 window.SF_ERRORS = [];
 window.addEventListener('error', function (e) {
   window.SF_ERRORS.push((e.message || 'Error') + (e.lineno ? ' (line ' + e.lineno + ')' : ''));
@@ -260,6 +260,7 @@ async function loadData(){
   const d = await call('api_getData', S.auth);
   S.data = d; S.bySku = {}; S.byUpc = {};
   Object.assign(S.auth, d.user); store.set('sf_auth2', S.auth);
+  if (isStaff()) d.items.forEach(it => { it.cost = ''; });   // Staff never see cost codes (the updated server also stops sending them)
   { const ok = myShopCodes(); if (!ok.includes(S.shop)) S.shop = ok.includes(d.user.shop) ? d.user.shop : (ok[0] || d.user.shop || (d.shops[0]||{}).code); }
   store.set('sf_shop', S.shop);
   d.items.forEach(it => {
