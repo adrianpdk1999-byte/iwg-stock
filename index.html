@@ -144,7 +144,7 @@ b.neg{color:var(--bad)}
 
 <script>
 /* Watchdog: a separate script, so it still runs if the main script fails. Shows the error on screen. */
-window.SF_VERSION = '2026-11-16c';
+window.SF_VERSION = '2026-11-17a';
 window.SF_ERRORS = [];
 window.addEventListener('error', function (e) {
   window.SF_ERRORS.push((e.message || 'Error') + (e.lineno ? ' (line ' + e.lineno + ')' : ''));
@@ -567,7 +567,7 @@ function reportView(){
   return `<h2>Report</h2>${seg}${body()}`;
 }
 function shopSummary(){
-  const rows = S.data.shops.map(s => {
+  const rows = (isStaff() ? S.data.shops.filter(s => s.code===S.auth.shop) : S.data.shops).map(s => {
     let models = 0, frames = 0, neg = 0, coming = 0;
     S.data.items.forEach(it => { const q = it.qty[s.code]||0; if (q) models++; if (q>0) frames += q; if (q<0) neg++; coming += (it.transit||{})[s.code]||0; });
     return {s, models, frames, neg, coming};
@@ -589,20 +589,23 @@ function requestsView(){
     ${done.length ? `<h2 style="font-size:15px">Recently decided</h2>${done.map(g => reqCard(g)).join('')}` : ''}`;
 }
 /** Shop columns chosen for the export (default: every shop). */
-const exShops = () => { const e = S.ex, all = S.data.shops; return e.shops ? all.filter(x => e.shops.includes(x.code)) : all; };
+const exShops = () => { const e = S.ex, all = S.data.shops;
+  if (isStaff()) return all.filter(x => x.code===S.auth.shop);            // Staff: own shop only
+  return e.shops ? all.filter(x => e.shops.includes(x.code)) : all; };
+const exCost = () => S.ex.cost && !isStaff();                              // Staff: never the cost code
 const exChk = (id, on, label) => `<label class="chk"><input type="checkbox" id="${id}" ${on?'checked':''}> ${label}</label>`;
 function exportView(){
   const e = S.ex, n = exportItems().length, sel = exShops();
   return `<h2 style="font-size:15px">Stock by shop</h2>${shopSummary()}
     <h2 style="font-size:15px">Export stock list</h2><div class="card">
-      <label>Shops to include (one count column each)</label>
+      ${isStaff() ? `<p style="margin:0">Shop: <b>${esc(shopName(S.auth.shop))}</b></p>` : `<label>Shops to include (one count column each)</label>
       <div class="chkgrid">${S.data.shops.map(x => exChk('exS_' + x.code, sel.some(y => y.code===x.code), esc(x.name))).join('')}</div>
-      <p class="row" style="margin:6px 0 0"><button class="btn alt small" data-act="exAll">Select all</button><button class="btn alt small" data-act="exNone">Clear</button></p>
+      <p class="row" style="margin:6px 0 0"><button class="btn alt small" data-act="exAll">Select all</button><button class="btn alt small" data-act="exNone">Clear</button></p>`}
       <label>Other columns</label>
-      <div class="chkgrid">${exChk('exCost', e.cost, 'Cost code')}${exChk('exRsp', e.rsp, 'RSP')}${exChk('exTotal', e.total, 'Total of chosen shops')}${exChk('exType', e.type, 'Type (sun / optical)')}${exChk('exComing', e.coming, 'Coming (in transit)')}</div>
+      <div class="chkgrid">${isStaff() ? '' : exChk('exCost', e.cost, 'Cost code')}${exChk('exRsp', e.rsp, 'RSP')}${exChk('exTotal', e.total, 'Total of chosen shops')}${exChk('exType', e.type, 'Type (sun / optical)')}${exChk('exComing', e.coming, 'Coming (in transit)')}</div>
       <label>Brand</label><select id="exBrand"><option value="">All brands</option>${brands().map(b => `<option ${e.brand===b?'selected':''}>${esc(b)}</option>`).join('')}</select>
       <label class="chk" style="margin-top:10px"><input type="checkbox" id="exOnly" ${e.only?'checked':''}> Only frames that the chosen shop${sel.length===1?'':'s'} have</label>
-      <p class="muted">${sel.length ? `${n} model${n===1?'':'s'} · columns: SKU, Brand, Model, Colour, Size${e.type?', Type':''}${e.cost?', Cost code':''}${e.rsp?', RSP':''}, ${sel.map(x => esc(shortName(x.code))).join(', ')}${e.total && sel.length>1?', Total':''}${e.coming?', Coming':''}` : 'Choose at least one shop.'}</p>
+      <p class="muted">${sel.length ? `${n} model${n===1?'':'s'} · columns: SKU, Brand, Model, Colour, Size${e.type?', Type':''}${exCost()?', Cost code':''}${e.rsp?', RSP':''}, ${sel.map(x => esc(shortName(x.code))).join(', ')}${e.total && sel.length>1?', Total':''}${e.coming?', Coming':''}` : 'Choose at least one shop.'}</p>
       <button class="btn wide" data-act="exStock" ${n && sel.length?'':'disabled'}>⬇ Download Excel</button>${msg('ex')}</div>`;
 }
 function exportItems(){
@@ -659,10 +662,10 @@ function stamp(){ const d = new Date(), p = n => String(n).padStart(2,'0'); retu
 async function exportStock(){
   await ensureXLSX();
   const e = S.ex, sel = exShops(), items = exportItems(), many = sel.length > 1;
-  const head = ['SKU','Brand','Model','Colour','Size'].concat(e.type ? ['Type'] : [], e.cost ? ['Cost code'] : [], e.rsp ? ['RSP (RM)'] : [],
+  const head = ['SKU','Brand','Model','Colour','Size'].concat(e.type ? ['Type'] : [], exCost() ? ['Cost code'] : [], e.rsp ? ['RSP (RM)'] : [],
     sel.map(x => x.name), e.total && many ? ['Total'] : [], e.coming ? ['Coming'] : []);
   const rows = items.map(it => { const q = sel.map(x => it.qty[x.code]||0);
-    return [it.sku, it.brand, it.model, it.colour, it.size].concat(e.type ? [it.desc] : [], e.cost ? [it.cost] : [], e.rsp ? [it.rsp || ''] : [],
+    return [it.sku, it.brand, it.model, it.colour, it.size].concat(e.type ? [it.desc] : [], exCost() ? [it.cost] : [], e.rsp ? [it.rsp || ''] : [],
       q, e.total && many ? [q.reduce((a,b) => a+b, 0)] : [], e.coming ? [sel.reduce((a,x) => a + ((it.transit||{})[x.code]||0), 0) || ''] : []); });
   const who = sel.length === S.data.shops.length ? 'All shops' : sel.map(x => x.name).join(', ');
   const title = [[`Stock list · ${who} · ${e.brand || 'All brands'} · exported ${new Date().toLocaleString()} by ${S.auth.name}`], []];
