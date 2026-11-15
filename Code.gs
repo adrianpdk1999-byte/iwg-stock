@@ -446,6 +446,7 @@ function api_getData(auth) {
   var u = checkUser_(auth);
   var d = getData_();
   d.user = userInfo_(u);
+  if (!u.admin && !u.manager) d.items.forEach(function (it) { it.cost = ''; });   // Staff never receive cost codes
   d.pushApp = PropertiesService.getScriptProperties().getProperty('ONESIGNAL_APP_ID') || '';
   return d;
 }

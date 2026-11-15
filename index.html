@@ -144,7 +144,7 @@ b.neg{color:var(--bad)}
 
 <script>
 /* Watchdog: a separate script, so it still runs if the main script fails. Shows the error on screen. */
-window.SF_VERSION = '2026-11-17a';
+window.SF_VERSION = '2026-11-17b';
 window.SF_ERRORS = [];
 window.addEventListener('error', function (e) {
   window.SF_ERRORS.push((e.message || 'Error') + (e.lineno ? ' (line ' + e.lineno + ')' : ''));
@@ -514,6 +514,8 @@ function xferView(){
   const others = S.data.shops.filter(s => s.code !== S.shop), G = transferGroups(), me = S.shop;
   const approvals = isAdmin() ? G.filter(g => g.status==='PENDING') : [];
   const incoming = G.filter(g => g.status==='IN TRANSIT' && g.to===me);
+  // Admins (and Managers of the receiving shop) can confirm arrival wherever the transfer is listed
+  const canReceive = g => g.status==='IN TRANSIT' && canStock() && myShopCodes().includes(g.to);
   const mine = G.filter(g => g.from===me && (g.status==='PENDING' || g.status==='IN TRANSIT') && !approvals.includes(g));
   const otherOpen = isAdmin() ? G.filter(g => g.status==='IN TRANSIT' && g.to!==me && g.from!==me) : [];
   const recent = G.filter(g => !['PENDING','IN TRANSIT'].includes(g.status) && (isAdmin() || g.from===me || g.to===me)).slice(0, 8);
@@ -521,7 +523,8 @@ function xferView(){
   return `${workSel()}${msg('xferAct')}
     ${sec('Waiting for your approval', approvals, g => `<button class="btn small" data-act="approve" data-id="${esc(g.id)}">Approve</button><button class="btn alt small" data-act="reject" data-id="${esc(g.id)}">Reject</button>`)}
     ${sec('Arriving at ' + esc(shopName(me)), incoming, g => canStock() ? `<button class="btn small" data-act="received" data-id="${esc(g.id)}">Received, add to our stock</button>` : '<span class="muted">Your Manager confirms when it arrives.</span>')}
-    ${sec('Sent from ' + esc(shopName(me)), mine, g => g.status==='PENDING' ? `<button class="btn alt small" data-act="cancelX" data-id="${esc(g.id)}">Cancel request</button>` : '')}
+    ${sec('Sent from ' + esc(shopName(me)), mine, g => g.status==='PENDING' ? `<button class="btn alt small" data-act="cancelX" data-id="${esc(g.id)}">Cancel request</button>`
+      : canReceive(g) ? `<button class="btn small" data-act="received" data-id="${esc(g.id)}">Mark received at ${esc(shortName(g.to))}</button>` : '')}
     ${sec('Other shops in transit', otherOpen, g => `<button class="btn alt small" data-act="received" data-id="${esc(g.id)}">Mark received</button>`)}
     ${canStock() ? `<h2>Request a transfer from ${esc(shopName(me))}</h2>
     <label>Send to</label><select id="toShop"><option value="">Choose shop…</option>
