@@ -144,7 +144,7 @@ b.neg{color:var(--bad)}
 
 <script>
 /* Watchdog: a separate script, so it still runs if the main script fails. Shows the error on screen. */
-window.SF_VERSION = '2026-11-18a';
+window.SF_VERSION = '2026-11-18b';
 window.SF_ERRORS = [];
 window.addEventListener('error', function (e) {
   window.SF_ERRORS.push((e.message || 'Error') + (e.lineno ? ' (line ' + e.lineno + ')' : ''));
@@ -1109,7 +1109,9 @@ async function tgRefresh(){
 function tgBox(){
   const T = S.tg;
   if (!T) return `<p class="muted" style="margin:0">Checking…</p>`;
-  if (!T.configured) return `<p class="muted" style="margin:0">Not set up yet. The owner adds the Telegram bot once (see the setup guide).</p>`;
+  if (T.old) return `<p class="msg warn" style="margin:0">The server is still the old version. In Apps Script: Deploy → Manage deployments → ✏️ → Version: <b>New version</b> → Deploy.</p>`;
+  if (T.error) return `<p class="msg err" style="margin:0">Telegram problem: ${esc(T.error)}</p>`;
+  if (!T.configured) return `<p class="muted" style="margin:0">Not set up yet. The owner adds the Telegram bot once (see the setup guide). (No TELEGRAM_BOT_TOKEN found in Script properties.)</p>`;
   if (T.linked) return `<p class="msg ok" style="margin:0 0 8px">Telegram is connected for ${esc(S.auth.name)} (bot @${esc(T.bot)}).</p>
     <button class="btn alt wide" data-act="tgUnlink">Turn off Telegram notifications</button>${msg('tg')}`;
   return `<p class="muted" style="margin:0 0 8px">${isAdmin() || isMgr() ? 'Get approvals waiting and stock moved by others at your shops in Telegram.' : 'Get a Telegram message when your sales are approved or rejected.'}

@@ -383,6 +383,13 @@ function sendTelegram_(q, props) {
     });
   });
 }
+/** Run this once from the Apps Script editor (select testTelegram ▸ Run) to give the script permission to contact Telegram. */
+function testTelegram() {
+  var me = tgCall_('getMe');
+  Logger.log('Telegram bot OK: @' + me.username);
+  PropertiesService.getScriptProperties().setProperty('TG_BOT_NAME', me.username);
+  return me.username;
+}
 function api_tgStatus(auth) {
   var u = checkUser_(auth), props = PropertiesService.getScriptProperties();
   if (!tgToken_()) return { configured: false };
