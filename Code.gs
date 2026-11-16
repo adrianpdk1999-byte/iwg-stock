@@ -316,15 +316,16 @@ function pushId_(uid) {
 function watchers_(shop) {
   return users_().filter(function (x) { return x.active && (x.admin || (x.manager && allowedShops_(x).indexOf(shop) >= 0)); });
 }
-function queuePush_(users, title, body) {
-  var me = ACTOR_ ? ACTOR_.id.toLowerCase() : '';
+function queuePush_(users, title, body, includeSelf) {
+  var me = ACTOR_ && !includeSelf ? ACTOR_.id.toLowerCase() : '';
   var ids = (users || []).filter(function (x) { return x && x.id.toLowerCase() !== me; }).map(function (x) { return x.id; });
   if (ids.length) PUSHQ_.push({ ids: ids, title: title, body: body });
 }
 /** One message per shop per action, e.g. "Anywear · Alex sold 2 frames: RB2140F 901S 52 …" */
 function queueMoves_(entries) {
-  var by = {};
+  var by = {}, sold = {};
   entries.forEach(function (e) {
+    if (e[2] === 'SOLD') { (sold[e[1]] || (sold[e[1]] = [])).push(e); return; }
     var g = by[e[1]] || (by[e[1]] = { n: 0, types: {}, skus: [], who: {} });
     g.n += Math.abs(Number(e[4]) || 0); g.types[e[2]] = 1; g.who[e[7]] = 1;
     if (g.skus.indexOf(e[3]) < 0) g.skus.push(e[3]);
@@ -336,6 +337,37 @@ function queueMoves_(entries) {
     var body = who + ' ' + what + ' ' + g.n + ' frame' + (g.n === 1 ? '' : 's') + ': ' + g.skus.slice(0, 3).join(', ') + (g.skus.length > 3 ? ' …' : '');
     queuePush_(watchers_(shop), names[shop] || shop, body);
   });
+  // Sales: one detailed message per shop: which frames, receipt, which account, which shop.
+  // Admins get it even for their own sales; Managers for others' sales at their shops.
+  Object.keys(sold).forEach(function (shop) {
+    var es = sold[shop], n = 0, who = {};
+    var lines = es.map(function (e) {
+      var q = Math.abs(Number(e[4]) || 0); n += q;
+      var acct = e[7] + (ACTOR_ && ACTOR_.name === e[7] ? ' (' + ACTOR_.id + ')' : '');
+      who[acct + (/approved by/i.test(e[8] || '') ? ' · ' + String(e[8]).match(/approved by[^·;]*/i)[0].trim() : '')] = 1;
+      return '• ' + e[3] + ' × ' + q + (e[6] ? ' · receipt ' + e[6] : '') + (e[5] !== '' && e[5] != null ? ' · left here ' + e[5] : '');
+    });
+    var title = '🧾 Sold ' + n + ' frame' + (n === 1 ? '' : 's') + ' · ' + (names[shop] || shop);
+    var body = lines.join('\n') + '\nBy: ' + Object.keys(who).join(', ');
+    var w = watchers_(shop);
+    queuePush_(w.filter(function (x) { return x.admin; }), title, body, true);
+    queuePush_(w.filter(function (x) { return !x.admin; }), title, body);
+  });
+}
+/** Short phone description from the browser's user agent, e.g. "iPhone · Safari". */
+function deviceName_(ua) {
+  ua = String(ua || '');
+  var dev = /iPad/.test(ua) ? 'iPad' : /iPhone/.test(ua) ? 'iPhone' : /Android/.test(ua) ? ((ua.match(/Android[^;)]*;\s*([^;)]+?)(?:\s+Build|\))/) || [])[1] || 'Android') :
+    /Macintosh/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows PC' : 'Unknown device';
+  var br = /Edg\//.test(ua) ? 'Edge' : /SamsungBrowser/.test(ua) ? 'Samsung Internet' : /CriOS|Chrome\//.test(ua) ? 'Chrome' : /FxiOS|Firefox/.test(ua) ? 'Firefox' : /Safari/.test(ua) ? 'Safari' : 'browser';
+  return dev + ' · ' + br;
+}
+function loginAlert_(u, id, result, device) {
+  var names = {}; shops_().forEach(function (s) { names[s.code] = s.name; });
+  var admins = users_().filter(function (x) { return x.active && x.admin; });
+  var who = u ? u.name + ' (' + u.id + ', ' + (u.admin ? 'Admin' : u.manager ? 'Manager' : 'Staff') + ')' : 'Unknown ID "' + id + '"';
+  queuePush_(admins, (result === 'OK' ? '🔑 Login' : '⚠️ ' + result) + (u && u.shop ? ' · ' + (names[u.shop] || u.shop) : ''),
+    who + '\n' + deviceName_(device) + ' · ' + fmt_(new Date()), true);
 }
 function flushPush_() {
   var q = PUSHQ_; PUSHQ_ = [];
@@ -488,7 +520,11 @@ function api_login(id, pass, device) {
     if (locked) { f.until = Date.now() + LOCK_MINUTES * 60000; f.n = 0; }
     cache.put(fk, JSON.stringify(f), LOCK_MINUTES * 60 + 60);
     logins.appendRow([new Date(), id.slice(0, 40), u ? u.name : '(unknown ID)', u ? u.shop : '', device, locked ? 'LOCKED ' + LOCK_MINUTES + ' MIN' : 'WRONG PASSWORD']);
-    if (locked) throw new Error('Too many wrong tries. This login is locked for ' + LOCK_MINUTES + ' minutes.');
+    if (locked) {
+      loginAlert_(u, id.slice(0, 40), 'Locked after ' + MAX_TRIES + ' wrong passwords', device);
+      flushPush_();   // the login fails, so send the warning now
+      throw new Error('Too many wrong tries. This login is locked for ' + LOCK_MINUTES + ' minutes.');
+    }
     var left = MAX_TRIES - f.n;
     throw new Error('Wrong user ID or password.' + (left <= 2 ? ' ' + left + ' tr' + (left === 1 ? 'y' : 'ies') + ' left before a ' + LOCK_MINUTES + '-minute lock.' : ''));
   }
@@ -503,6 +539,7 @@ function api_login(id, pass, device) {
   var token = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
   props.setProperty('tok_' + hash_(token), JSON.stringify({ uid: u.id, exp: now + PASS_DAYS * 86400000, ph: hash_(u.pass) }));
   logins.appendRow([new Date(), u.id, u.name, u.shop, device, 'OK']);
+  loginAlert_(u, u.id, 'OK', device);
   var info = userInfo_(u);
   info.token = token;
   return info;

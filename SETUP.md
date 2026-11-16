@@ -82,7 +82,8 @@ All data lives in **one Google Sheet** that you own. You can open it any time to
 
 ## Telegram notifications (free)
 
-Telegram messages for approvals waiting, requests approved or rejected, and stock moved by others. Your own actions never notify you.
+Telegram messages for approvals waiting, requests approved or rejected, and stock moved by others.
+Admins also get **every sale** (frames, receipt, which account, which shop, who approved), including their own, and **every login** (who, which shop, which phone) plus a warning when a login is locked after 5 wrong passwords.
 
 **Owner, once:**
 1. In Telegram, open **@BotFather** → send `/newbot` → give a name (e.g. *IWG Stock Finder*) and a username ending in `bot`. Copy the **token** it gives you.
